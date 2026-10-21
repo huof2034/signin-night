@@ -19,7 +19,7 @@ def release(version='1.6.0'):
 class ReleaseTests(TestCase):
     def test_numeric_comparison_and_current_version(self):
         self.assertTrue(updates.parse_release(release('1.10.0'),'1.9.0').available)
-        self.assertFalse(updates.parse_release(release('1.5.0')).available)
+        self.assertFalse(updates.parse_release(release(updates.VERSION)).available)
         self.assertFalse(updates.parse_release(release('1.4.0')).available)
 
     def test_rejects_untrusted_urls_and_incomplete_installers(self):

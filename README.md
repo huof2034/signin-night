@@ -2,7 +2,7 @@
 
 安徽工业大学晚寝考勤桌面助手。Windows 普通版支持两个账号独立定时、在线账号验证、系统托盘、结果通知，以及浅色、夜间、跟随系统和 Wallpaper Engine 动态壁纸主题。
 
-**[下载最新版 Windows 安装包](https://github.com/huof2034/signin-night/releases/latest/download/AHUTSignIn-Setup-1.5.0-x64.exe)** · [全部版本](https://github.com/huof2034/signin-night/releases) · [中文使用说明](docs/使用说明.md)
+**[下载最新版 Windows 安装包](https://github.com/huof2034/signin-night/releases/latest/download/AHUTSignIn-Setup-1.5.1-x64.exe)** · [全部版本](https://github.com/huof2034/signin-night/releases) · [中文使用说明](docs/使用说明.md)
 
 ## 免责声明与使用限制
 
@@ -15,7 +15,7 @@
 
 ## 安装与开始使用
 
-1. 下载 `AHUTSignIn-Setup-1.5.0-x64.exe`，在 Windows 10/11 x64 上运行。安装到当前用户目录，无需另外安装 Python 或 Node.js。
+1. 下载 `AHUTSignIn-Setup-1.5.1-x64.exe`，在 Windows 10/11 x64 上运行。安装到当前用户目录，无需另外安装 Python 或 Node.js。
 2. 打开“晚安助手”，输入自己的学号和学校考勤密码，点击“验证并进入”。首次添加账号必须联网验证；验证操作不会提交签到。
 3. 考勤系统默认密码为：`Ahgydx@920`。这只是提示，不会自动填入；若已修改密码，请输入自己的密码。
 4. 在定时设置中选择北京时间，启用自动签到。默认时间为每天 **22:00**，新添加账号的计划需要自行启用。
@@ -37,9 +37,9 @@
 
 升级时先在托盘中退出程序，再安装新版。已有账号和计划保留，安装程序会更新已托管任务的执行路径。卸载会清理属于该安装目录的计划任务与快捷方式，保留个人数据以便重装；如需完全清除，请在卸载后自行删除上述数据目录。
 
-“外观与通知 → 软件更新”及托盘菜单提供**手动检查更新**。默认启动 8 秒后自动检查，窗口或托盘运行期间每 4 小时检查一次 GitHub 正式发布版；可关闭自动检查，完全退出程序后不再检查。发现新版会显示下载入口并按通知设置提示，由你下载安装，不会自动覆盖程序或打断签到。检查仅访问公开版本信息，不发送学号、密码或壁纸；网络失败不影响签到计划。
+点击窗口顶部软件名旁的 **v版本号**，展开菜单即可检查更新；登录页和主界面均可使用。“外观与通知 → 软件更新”及托盘菜单也提供**手动检查更新**。默认启动 8 秒后自动检查，窗口或托盘运行期间每 4 小时检查一次 GitHub 正式发布版；可关闭自动检查，完全退出程序后不再检查。发现新版会显示下载入口并按通知设置提示，由你下载安装，不会自动覆盖程序或打断签到。检查仅访问公开版本信息，不发送学号、密码或壁纸；网络失败不影响签到计划。
 
-1.5.0 同时改进分钟跨小时调整（22:00 减一分钟为 21:59）、主题标题栏和外框、主页计划状态与倒计时、配置失败原因提示，以及系统计划的保存速度与回读校验。
+1.5.1 新增随主题变化的顶部标题栏与版本菜单，保留拖动、双击最大化、边缘缩放、最小化和关闭收进托盘。并包含 1.5.0 的改进：分钟跨小时调整（22:00 减一分钟为 21:59）、主题标题栏和外框、主页计划状态与倒计时、配置失败原因提示，以及系统计划的保存速度与回读校验。
 
 安装包暂未购买代码签名证书。可使用发布页 `SHA256SUMS.txt` 校验文件。Windows 10/11 x64 为目标平台，当前发布检查在 Windows 11 x64 完成；学校接口、网络、驱动和 Wallpaper Engine 项目兼容性可能影响实际使用。请查看日志并以学校系统确认的结果为准。
 
@@ -60,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop\build-installer.ps1
 离线回归测试（不会提交学校签到）：
 
 ```powershell
-.\.desktop-venv\Scripts\python.exe -B -m unittest test_offline test_desktop test_desktop_ui test_appearance test_live_wallpaper test_login_runtime test_accounts test_accounts_ui test_release test_takeover test_updates test_software_updates
+.\.desktop-venv\Scripts\python.exe -B -m unittest test_offline test_desktop test_desktop_ui test_appearance test_live_wallpaper test_login_runtime test_accounts test_accounts_ui test_release test_takeover test_updates test_software_updates test_titlebar
 .\.desktop-venv\Scripts\python.exe -B test_accounts_runtime.py
 ```
 

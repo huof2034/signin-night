@@ -31,6 +31,8 @@ def driver():
                 assert QThread.currentThread()==app.thread();assert w.isVisible()
                 stage=result['stage']
                 if stage==0:
+                    from desktop import updates
+                    assert w.title_bar.version.isVisible() and w.title_bar.version.text()=='v'+updates.VERSION
                     w.enter_offline();w.show_login(add=True);w.student_edit.setText('259088888');w.password_edit.setText('wrong-test');result['stage']=1;w.login_button.click()
                 elif stage==1:
                     assert w.login_error.isVisible() and len(service.status()['accounts'])==1 and tasks['primary'].enabled
@@ -60,6 +62,10 @@ def driver():
                     if w.update_checking:return
                     assert w.update_download.isVisible() and w.tray_download.isVisible() and '1.6.0' in w.update_status.text()
                     assert not w.busy and not tasks['primary'].enabled and tasks['secondary'].enabled
+                    w.title_bar.version.click();app.processEvents();assert w.title_bar.menu.isVisible()
+                    assert w.title_bar.check_action.isEnabled() and w.title_bar.download_action.isVisible();w.title_bar.menu.hide()
+                    w.title_bar.maximize.click();app.processEvents();assert w.isMaximized()
+                    w.title_bar.maximize.click();app.processEvents();assert not w.isMaximized()
                     poll.stop();result['stage']=8;w.quit_ui()
             except Exception as exc:result['error']=type(exc).__name__;poll.stop();app.quit()
         poll.timeout.connect(tick);poll.start();watchdog=QTimer();watchdog.setSingleShot(True)

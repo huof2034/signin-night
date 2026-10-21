@@ -138,6 +138,13 @@ QComboBox::down-arrow,QTimeEdit::up-arrow,QTimeEdit::down-arrow {{ image:none; }
 QComboBox QAbstractItemView {{ background:{p['surface']}; color:{p['text']}; selection-background-color:{p['soft']}; }}
 QToolTip {{ background:{p['surface']}; color:{p['text']}; border:1px solid {p['border']}; padding:6px; }}
 QDialog,QMessageBox {{ background:{p['bg']}; }}
+QFrame#TitleBar {{ background:{blend(p['bg'],p['surface'],.45)}; border:0; border-bottom:1px solid {p['border']}; }}
+QLabel#CaptionName {{ color:{p['heading']}; font-size:13px; font-weight:600; }}
+QPushButton#CaptionVersion {{ color:{p['accent_text']}; background:transparent; border:1px solid transparent; border-radius:12px; padding:2px 9px; font-size:11px; }}
+QPushButton#CaptionVersion:hover,QPushButton#CaptionVersion:focus {{ background:{p['soft']}; border-color:{p['border']}; }}
+QPushButton#CaptionButton,QPushButton#CaptionClose {{ color:{p['text']}; background:transparent; border:0; border-radius:5px; padding:0; }}
+QPushButton#CaptionButton:hover {{ background:{p['soft']}; }}
+QPushButton#CaptionClose:hover {{ background:#c42b3b; color:white; }}
 QSlider::groove:horizontal {{ height:6px; background:{p['border']}; border-radius:3px; }}
 QSlider::sub-page:horizontal {{ background:{p['accent']}; border-radius:3px; }}
 QSlider::handle:horizontal {{ width:16px; margin:-6px 0; background:{p['surface']}; border:2px solid {p['accent']}; border-radius:9px; }}

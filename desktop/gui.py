@@ -22,6 +22,7 @@ from .notifications import EventNotifications
 from .live_wallpaper import WallpaperCanvas, LiveWallpaper
 from .accounts import StandardService
 from . import updates
+from .titlebar import TitleBar
 
 BLUE = '#3478ed'
 MUTED = '#7789a2'
@@ -312,9 +313,11 @@ class Window(QMainWindow):
         self.theme_combos = []; self.theme_colors = palette(self.preferences.value['theme'],self.preferences.value['accent'],self.preferences.value['wallpaper_dark'])
         self.jobs = {}; self.busy = False; self.rendering = False; self.authenticated = False; self.task_state = None; self.configuration_error=''; self.task_probe_error=''; self.remote_state = None; self.probing = False
         self.state = service.status(); self.controls = []; self.nav_buttons = []; self._quitting = False
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint,True)
         self.setWindowTitle('晚安助手 · AHUT'); self.setWindowIcon(icon('moon')); self.resize(1180, 820); self.setMinimumSize(980, 690)
         self.wallpaper_canvas=WallpaperCanvas(); self.setCentralWidget(self.wallpaper_canvas)
-        canvas_layout=QVBoxLayout(self.wallpaper_canvas);canvas_layout.setContentsMargins(0,0,0,0)
+        canvas_layout=QVBoxLayout(self.wallpaper_canvas);canvas_layout.setContentsMargins(0,0,0,0);canvas_layout.setSpacing(0)
+        self.title_bar=TitleBar(self);canvas_layout.addWidget(self.title_bar)
         self.root_stack = QStackedWidget();canvas_layout.addWidget(self.root_stack)
         self.build_login(); self.build_main(); self.root_stack.setCurrentIndex(0); self.apply_theme(); self.refresh()
         self.refresh_timer = QTimer(self); self.refresh_timer.timeout.connect(self.refresh); self.refresh_timer.start(30_000)
@@ -523,6 +526,7 @@ class Window(QMainWindow):
         if self._quitting or self.update_checking: return
         self.update_checking=True; self.update_button.setEnabled(False)
         self.update_status.setText('正在连接 GitHub 检查正式发布版…')
+        self.title_bar.sync()
         if manual:self.login_update_status.setText('正在检查更新…'); self.login_update_status.show()
         self.tray_update.setEnabled(False)
         task=Job(updates.check_latest); key=id(task)
@@ -532,12 +536,14 @@ class Window(QMainWindow):
             self.update_button.setEnabled(True); self.tray_update.setEnabled(True)
             checked=now().strftime('%m-%d %H:%M')
             if error:
+                self.title_bar.sync()
                 self.update_status.setText('检查未完成：'+error+'（'+checked+'）')
                 if manual:
                     self.notify('更新检查未完成：'+error,True)
                     self.login_update_status.setText('更新检查未完成：'+error)
                 return
             self.update_release=value
+            self.title_bar.sync()
             self.update_download.setVisible(value.available)
             message=('发现新版本 '+value.version+'，可打开下载页下载安装包。' if value.available else '当前版本 '+updates.VERSION+' 已是最新可用版本。')
             self.update_status.setText(message+'（检查于 '+checked+'）')
@@ -622,6 +628,7 @@ class Window(QMainWindow):
             self.tray.setIcon(icon('moon',p['accent_text'])); self.tray_menu.setStyleSheet(theme_style)
             for key,action in self.tray_themes.items():
                 with QSignalBlocker(action): action.setChecked(key==value['theme'])
+        self.title_bar.menu.setStyleSheet(theme_style)
         if self.pages.currentIndex()==3: self.render_history()
         from .window_chrome import apply_chrome
         apply_chrome(self,p,value['theme'])
@@ -636,7 +643,8 @@ class Window(QMainWindow):
         self.refresh_wallpaper(force=True)
 
     def showEvent(self,event):
-        from .window_chrome import apply_chrome
+        from .window_chrome import apply_chrome,enable_custom_frame
+        enable_custom_frame(self)
         apply_chrome(self,self.theme_colors,self.preferences.value['theme'])
         super().showEvent(event);self.sync_live_wallpaper()
 
@@ -647,7 +655,14 @@ class Window(QMainWindow):
     def changeEvent(self,event):
         super().changeEvent(event)
         from PySide6.QtCore import QEvent
-        if event.type()==QEvent.Type.WindowStateChange:QTimer.singleShot(0,self.sync_live_wallpaper)
+        if event.type()==QEvent.Type.WindowStateChange:
+            if hasattr(self,'title_bar'):self.title_bar.sync()
+            QTimer.singleShot(0,self.sync_live_wallpaper)
+
+    def nativeEvent(self,event_type,message):
+        from .window_chrome import frame_event
+        result=frame_event(self,message)
+        return result if result is not None else super().nativeEvent(event_type,message)
 
     @Slot()
     def system_theme_changed(self,*args):
