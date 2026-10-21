@@ -6,21 +6,22 @@ import logging
 from pathlib import Path
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt, QRunnable, QObject, Signal, Slot, QThreadPool, QTimer, QTime, QSize, QLockFile, QSignalBlocker, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QLinearGradient, QShortcut, QKeySequence, QAction, QActionGroup
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QLineEdit, QCheckBox, QTimeEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QProgressBar,
-    QScrollArea, QFileDialog, QSpinBox, QSystemTrayIcon, QMenu, QMessageBox, QAbstractSpinBox, QComboBox, QGraphicsOpacityEffect, QStyleOptionSpinBox, QStyle, QSlider)
+    QScrollArea, QFileDialog, QSpinBox, QSystemTrayIcon, QMenu, QMessageBox, QAbstractSpinBox, QComboBox, QGraphicsOpacityEffect, QStyleOptionSpinBox, QStyleOptionButton, QStyle, QSlider)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
-from .core import Service, UserError, CHINA, now, legacy, ROOT
+from .core import Service, UserError, CHINA, now, legacy, ROOT, TASK_DESCRIPTION
 from .appearance import Preferences, THEMES, WallpaperReader, palette, stylesheet, apply_native_palette, system_dark
 from .notifications import EventNotifications
 from .live_wallpaper import WallpaperCanvas, LiveWallpaper
 from .accounts import StandardService
+from . import updates
 
 BLUE = '#3478ed'
 MUTED = '#7789a2'
@@ -101,6 +102,11 @@ QLabel#Small { color:#8091a9; font-size:11px; }
 QLabel#Time { color:#2c579b; font-size:59px; font-family:"Segoe UI"; font-weight:500; }
 QLabel#Status { color:#2d496d; font-size:22px; font-weight:500; }
 QLabel#Pill { background:#e9f6ef; color:#328a65; border-radius:7px; padding:5px 10px; font-size:11px; }
+QLabel#PlanPill { min-height:22px; background:#e9f6ef; color:#328a65; border-radius:9px; padding:8px 16px; font-size:14px; font-weight:600; }
+QLabel#PlanPill[health="ok"] { padding-left:36px; }
+QLabel#Countdown { font-size:18px; font-weight:600; padding:10px 12px; border-radius:9px; min-height:28px; color:#2d496d; background:#edf4ff; }
+QCheckBox#planEnabled { font-size:14px; font-weight:600; spacing:10px; }
+QCheckBox#planEnabled::indicator { width:24px; height:24px; border-radius:6px; }
 QLabel#Warning { background:#fff4df; color:#967027; border:1px solid #f5dfb1; border-radius:10px; padding:13px; }
 QLabel#Notice { background:#edf4ff; color:#4c73ab; border:1px solid #dce8fb; border-radius:10px; padding:12px; }
 QLabel#Error { background:#fff0f0; color:#b35459; border:1px solid #f2d8da; border-radius:10px; padding:12px; }
@@ -225,7 +231,48 @@ class ThemeCombo(QComboBox):
         painter.drawLine(x-3,y-2,x,y+1); painter.drawLine(x,y+1,x+3,y-2); painter.end()
 
 
+class PlanPill(QLabel):
+    def __init__(self,parent=None):
+        super().__init__(parent);self.setObjectName('PlanPill')
+
+    def paintEvent(self,event):
+        super().paintEvent(event)
+        if self.property('health')!='ok':return
+        colors=getattr(self.window(),'theme_colors',palette('light'))
+        painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(colors['success']),2.6,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin))
+        x,y=17,self.height()//2
+        painter.drawLine(x-5,y,x-1,y+4);painter.drawLine(x-1,y+4,x+6,y-5);painter.end()
+
+
+class PlanCheckBox(QCheckBox):
+    def paintEvent(self,event):
+        super().paintEvent(event)
+        if not self.isChecked():return
+        option=QStyleOptionButton();self.initStyleOption(option)
+        rect=self.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator,option,self)
+        painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor('#ffffff'),2.6,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin))
+        x,y=rect.center().x(),rect.center().y()
+        painter.drawLine(x-6,y,x-2,y+4);painter.drawLine(x-2,y+4,x+6,y-5);painter.end()
+
+
 class TimeEdit(QTimeEdit):
+    def stepBy(self,steps):
+        self.interpretText()
+        factor=60 if self.currentSection()==QTimeEdit.Section.HourSection else 1
+        current=self.time().hour()*60+self.time().minute()
+        lower=self.minimumTime().hour()*60+self.minimumTime().minute()
+        upper=self.maximumTime().hour()*60+self.maximumTime().minute()
+        value=max(lower,min(upper,current+int(steps)*factor))
+        section=self.currentSection();self.setTime(QTime(value//60,value%60));self.setCurrentSection(section)
+
+    def stepEnabled(self):
+        flags=QAbstractSpinBox.StepEnabledFlag.StepNone
+        if self.time()<self.maximumTime():flags|=QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
+        if self.time()>self.minimumTime():flags|=QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
+        return flags
+
     def paintEvent(self,event):
         super().paintEvent(event)
         p=getattr(self.window(),'theme_colors',palette('light'))
@@ -251,7 +298,7 @@ class Window(QMainWindow):
             for name in ['msyh.ttc','msyhbd.ttc','segoeui.ttf']:
                 if (font_root/name).exists(): QFontDatabase.addApplicationFont(str(font_root/name))
         self.service = service; self.standard=getattr(service,'edition',None)=='standard'; self.login_adding=False
-        self.pool = QThreadPool(self); self.pool.setMaxThreadCount(1)
+        self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.preferences = Preferences(service.data); self.wallpaper_reader = WallpaperReader()
         self.transparency_preview=self.preferences.value['surface_transparency']
         self.transparency_render_timer=QTimer(self); self.transparency_render_timer.setSingleShot(True)
@@ -259,9 +306,11 @@ class Window(QMainWindow):
         self.transparency_save_timer=QTimer(self); self.transparency_save_timer.setSingleShot(True)
         self.transparency_save_timer.timeout.connect(self.flush_transparency)
         self.appearance_pool = QThreadPool(self); self.appearance_pool.setMaxThreadCount(1); self.wallpaper_reading=False
+        self.update_pool = QThreadPool(self); self.update_pool.setMaxThreadCount(1)
+        self.update_checking=False; self.update_release=None; self.update_notified_version=''
         self.event_notifications = EventNotifications(now()); self.wallpaper_source = '正在读取本机壁纸…'
         self.theme_combos = []; self.theme_colors = palette(self.preferences.value['theme'],self.preferences.value['accent'],self.preferences.value['wallpaper_dark'])
-        self.jobs = {}; self.busy = False; self.rendering = False; self.authenticated = False; self.task_state = None; self.remote_state = None; self.probing = False
+        self.jobs = {}; self.busy = False; self.rendering = False; self.authenticated = False; self.task_state = None; self.configuration_error=''; self.task_probe_error=''; self.remote_state = None; self.probing = False
         self.state = service.status(); self.controls = []; self.nav_buttons = []; self._quitting = False
         self.setWindowTitle('晚安助手 · AHUT'); self.setWindowIcon(icon('moon')); self.resize(1180, 820); self.setMinimumSize(980, 690)
         self.wallpaper_canvas=WallpaperCanvas(); self.setCentralWidget(self.wallpaper_canvas)
@@ -282,6 +331,10 @@ class Window(QMainWindow):
         self.runtime_error.connect(self.recover_error, Qt.ConnectionType.QueuedConnection)
         self.task_timer = QTimer(self); self.task_timer.timeout.connect(self.probe_task); self.task_timer.start(60_000)
         QTimer.singleShot(100, self.probe_task)
+        self.update_timer=QTimer(self); self.update_timer.setInterval(4*60*60*1000)
+        self.update_timer.timeout.connect(self.auto_check_update); self.update_timer.start()
+        self.update_start_timer=QTimer(self); self.update_start_timer.setSingleShot(True)
+        self.update_start_timer.timeout.connect(self.auto_check_update); self.update_start_timer.start(8000)
         if self.state['configured'] and self.state['auto_login']:
             QTimer.singleShot(350, self.login_saved)
 
@@ -309,6 +362,7 @@ class Window(QMainWindow):
         self.login_progress = QProgressBar(); self.login_progress.setRange(0, 0); self.login_progress.setTextVisible(False); self.login_progress.hide(); form.addWidget(self.login_progress)
         form.addWidget(text('凭据在本机加密保存，用于每日定时执行。\n登录仅验证账号，不会提交签到。', 'Small', True)); form.addSpacing(10)
         self.offline_button = button('离线查看已保存的配置'); self.offline_button.clicked.connect(self.enter_offline); self.offline_button.setVisible(self.state['configured']); form.addWidget(self.offline_button)
+        self.login_update_status=text('','Small',True); self.login_update_status.hide(); form.addWidget(self.login_update_status)
         row = QHBoxLayout(); row.addStretch(); row.addWidget(form_widget); row.addStretch(); rv.addLayout(row); rv.addStretch(); layout.addWidget(right, 1)
         self.password_edit.returnPressed.connect(self.login); self.student_edit.returnPressed.connect(lambda: self.password_edit.setFocus())
         if self.state['configured']:
@@ -331,7 +385,7 @@ class Window(QMainWindow):
         relogin = self.add_control(button('重新验证当前账号' if self.standard else '切换 / 验证账号', 'user')); relogin.clicked.connect(lambda:self.show_login()); side.addWidget(relogin); side.addWidget(text('凭据加密 · 北京时间', 'Small')); layout.addWidget(sidebar)
         content = QWidget(); cv = QVBoxLayout(content); cv.setContentsMargins(30, 25, 30, 15); cv.setSpacing(15)
         heading_row = QHBoxLayout(); heading_col = QVBoxLayout(); heading_col.setSpacing(3); heading_col.addWidget(text('AHUT · DORM CHECK-IN', 'Eyebrow')); self.page_heading = text('签到概览', 'Heading'); heading_col.addWidget(self.page_heading); self.page_subtitle = text('', 'Muted'); heading_col.addWidget(self.page_subtitle); heading_row.addLayout(heading_col); heading_row.addStretch(); heading_row.addWidget(self.theme_combo()); self.auth_badge = text('未联网验证', 'Pill'); heading_row.addWidget(self.auth_badge, alignment=Qt.AlignmentFlag.AlignVCenter); cv.addLayout(heading_row)
-        self.migration_frame = QFrame(); self.migration_frame.setObjectName('Card'); migration_layout = QHBoxLayout(self.migration_frame); migration_layout.setContentsMargins(14, 10, 14, 10); migration_layout.addWidget(text('新版尚未接管。旧版任务保持原有安排。', 'Muted'), 1); self.takeover_button = self.add_control(button('接管本机计划', 'check', True)); self.takeover_button.clicked.connect(lambda: self.job('正在接管本机计划…', self.service.activate_local)); migration_layout.addWidget(self.takeover_button); cv.addWidget(self.migration_frame)
+        self.migration_frame = QFrame(); self.migration_frame.setObjectName('Card'); migration_layout = QHBoxLayout(self.migration_frame); migration_layout.setContentsMargins(14, 10, 14, 10); migration_layout.addWidget(text('新版尚未接管。旧版任务保持原有安排。', 'Muted'), 1); self.takeover_button = self.add_control(button('接管本机计划', 'check', True)); self.takeover_button.clicked.connect(lambda: self.job('正在接管本机计划…', self.service.activate_local,plan_job=True)); migration_layout.addWidget(self.takeover_button); cv.addWidget(self.migration_frame)
         self.notice = text('', 'Notice', True); self.notice.hide(); cv.addWidget(self.notice)
         self.progress = QProgressBar(); self.progress.setRange(0, 0); self.progress.setTextVisible(False); self.progress.hide(); cv.addWidget(self.progress)
         self.pages = QStackedWidget()
@@ -342,9 +396,11 @@ class Window(QMainWindow):
 
     def overview(self):
         page = QWidget(); outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(18)
+        self.configuration_notice=text('', 'Error', True);self.configuration_notice.setVisible(False);outer.addWidget(self.configuration_notice)
+        self.execution_feedback=text('', 'Warning', True);self.execution_feedback.setVisible(False);outer.addWidget(self.execution_feedback)
         top = QHBoxLayout(); top.setSpacing(16)
-        frame, box = card(); head = QHBoxLayout(); head.addWidget(text('下一次签到', 'Section')); head.addStretch(); self.plan_pill = text('', 'Pill'); head.addWidget(self.plan_pill); box.addLayout(head)
-        self.big_time = text('22:00', 'Time'); box.addWidget(self.big_time); self.next_label = text('', 'Muted'); box.addWidget(self.next_label); self.count_label = text('', 'Muted'); box.addWidget(self.count_label); box.addSpacing(5)
+        frame, box = card(); head = QHBoxLayout(); head.addWidget(text('下一次签到', 'Section')); head.addStretch(); self.plan_pill = PlanPill(); head.addWidget(self.plan_pill); box.addLayout(head)
+        self.big_time = text('22:00', 'Time'); box.addWidget(self.big_time); self.next_label = text('', 'Muted'); box.addWidget(self.next_label); self.count_label = text('', 'Countdown', True); box.addWidget(self.count_label); box.addSpacing(5)
         end = QHBoxLayout(); self.executor_label = text('', 'Small'); end.addWidget(self.executor_label, 1); edit = button('调整时间', 'clock'); edit.clicked.connect(lambda: self.go(1)); end.addWidget(edit); box.addLayout(end); top.addWidget(frame, 3)
         today, tv = card(); tv.addWidget(text('今日状态', 'Section')); tv.addSpacing(7); clock = icon_label('clock',30); tv.addWidget(clock); self.today_status = text('', 'Status'); tv.addWidget(self.today_status); self.today_detail = text('', 'Muted', True); tv.addWidget(self.today_detail); tv.addStretch(); tv.addWidget(text('当天成功后跳过重复执行', 'Small')); top.addWidget(today, 2); outer.addLayout(top)
         if self.standard:
@@ -363,13 +419,13 @@ class Window(QMainWindow):
 
     def schedule_page(self):
         page = QWidget(); outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(17)
-        frame, box = card(); header = QHBoxLayout(); label_col = QVBoxLayout(); label_col.addWidget(text('每天自动签到', 'Section')); label_col.addWidget(text('每天一个时间，统一使用北京时间。', 'Muted')); header.addLayout(label_col, 1); self.enabled_check = self.add_control(QCheckBox('启用计划')); self.enabled_check.toggled.connect(self.toggle_enabled); header.addWidget(self.enabled_check); box.addLayout(header); box.addSpacing(18); box.addWidget(text('执行时间', 'Muted'))
-        row = QHBoxLayout(); self.time_edit = TimeEdit(QTime(22, 0)); self.time_edit.setObjectName('scheduleTime'); self.time_edit.setDisplayFormat('HH:mm'); self.time_edit.setMinimumTime(QTime(21, 20)); self.time_edit.setMaximumTime(QTime(23, 59)); self.time_edit.setMinimumWidth(210); self.time_edit.timeChanged.connect(self.schedule_dirty); row.addWidget(self.time_edit); row.addSpacing(10); self.save_time = self.add_control(button('保存并应用', 'check', True)); self.save_time.clicked.connect(self.apply_time); row.addWidget(self.save_time); row.addStretch(); box.addLayout(row)
+        frame, box = card(); header = QHBoxLayout(); label_col = QVBoxLayout(); label_col.addWidget(text('每天自动签到', 'Section')); label_col.addWidget(text('每天一个时间，统一使用北京时间。', 'Muted')); header.addLayout(label_col, 1); self.enabled_check = self.add_control(PlanCheckBox('启用计划')); self.enabled_check.setObjectName('planEnabled'); self.enabled_check.toggled.connect(self.toggle_enabled); header.addWidget(self.enabled_check); box.addLayout(header); box.addSpacing(18); box.addWidget(text('执行时间', 'Muted'))
+        row = QHBoxLayout(); self.time_edit = TimeEdit(QTime(22, 0)); self.time_edit.setObjectName('scheduleTime'); self.time_edit.setDisplayFormat('HH:mm'); self.time_edit.setMinimumTime(QTime(21, 30)); self.time_edit.setMaximumTime(QTime(23, 30)); self.time_edit.setCurrentSection(QTimeEdit.Section.MinuteSection); self.time_edit.setMinimumWidth(210); self.time_edit.timeChanged.connect(self.schedule_dirty); row.addWidget(self.time_edit); row.addSpacing(10); self.save_time = self.add_control(button('保存并应用', 'check', True)); self.save_time.clicked.connect(self.apply_time); row.addWidget(self.save_time); row.addStretch(); box.addLayout(row)
         quick = QHBoxLayout()
         for value in ['21:40', '22:00', '22:10', '22:20']:
             item = button(value); item.clicked.connect(lambda checked=False, v=value: self.time_edit.setTime(QTime.fromString(v, 'HH:mm'))); quick.addWidget(item)
         quick.addStretch(); box.addLayout(quick); self.schedule_saved = text('', 'Small', True); box.addWidget(self.schedule_saved)
-        box.addWidget(text('当前适配脚本支持 21:20 后执行；实际开放时段以学校系统为准。\n修改后同步系统任务与执行窗口，错过当天时间不会补交昨天的签到。', 'Notice', True)); outer.addWidget(frame)
+        box.addWidget(text('可设定北京时间 21:30–23:30；实际开放时段以学校系统为准。\n修改后同步系统任务与执行窗口，错过当天时间不会补交昨天的签到。', 'Notice', True)); outer.addWidget(frame)
         rules, rv = card(); rv.addWidget(text('执行规则', 'Section')); rv.addWidget(text(('• 两个账号各自设置时间、启用和暂停\n• 切换当前账号不会停止另一个账号的计划\n• 每个账号当天成功后跳过重复执行\n• 在各自设定时间起 15 分钟内执行，不跨日补签\n• 关闭界面后，本机系统任务继续保留' if self.standard else '• 同一天成功后跳过重复执行\n• 在设定时间起的 15 分钟内执行，不跨日补签\n• 备用端离线时显示“待同步”，启用它之前必须同步\n• 关闭界面不会停止系统计划；暂停计划才会停止自动执行'), 'Muted', True)); outer.addWidget(rules); outer.addStretch(); return page
 
     def mode_page(self):
@@ -449,7 +505,61 @@ class Window(QMainWindow):
         for key,label in [('notifications','启用桌面通知'),('notify_success','签到成功'),('notify_failed','签到失败'),('notify_mode','本机 / VPS 执行端切换')]:
             check=QCheckBox(label); check.setChecked(self.preferences.value[key]); check.toggled.connect(lambda checked,k=key:self.save_preference(k,checked)); box.addWidget(check); self.preference_checks[key]=check
         test=button('发送测试通知','check'); test.clicked.connect(self.test_notification); box.addWidget(test,alignment=Qt.AlignmentFlag.AlignLeft)
-        box.addWidget(text('通知仅在托盘程序运行时有效；VPS 结果约每分钟检查。通知显示遵循 Windows 通知设置和免打扰。','Small',True)); outer.addWidget(frame); outer.addStretch(); return page
+        box.addWidget(text('通知仅在托盘程序运行时有效；VPS 结果约每分钟检查。通知显示遵循 Windows 通知设置和免打扰。','Small',True)); outer.addWidget(frame)
+        frame,box=card(); box.addWidget(text('软件更新 · 当前版本 '+updates.VERSION,'Section'))
+        check=QCheckBox('自动检查新版本'); check.setChecked(self.preferences.value['auto_check_updates'])
+        check.toggled.connect(lambda checked:self.save_preference('auto_check_updates',checked))
+        self.preference_checks['auto_check_updates']=check; box.addWidget(check)
+        box.addWidget(text('启动 8 秒后及运行期间每 4 小时检查 GitHub 正式版。退出程序后停止检查；不会自动下载或安装，不影响定时签到。','Small',True))
+        self.update_status=text('尚未检查更新。','Muted',True); box.addWidget(self.update_status)
+        row=QHBoxLayout(); self.update_button=button('检查更新'); self.update_button.clicked.connect(lambda:self.check_update(manual=True)); row.addWidget(self.update_button)
+        self.update_download=button('打开新版下载页',primary=True); self.update_download.clicked.connect(self.open_update); self.update_download.hide(); row.addWidget(self.update_download); row.addStretch(); box.addLayout(row)
+        outer.addWidget(frame); outer.addStretch(); return page
+
+    def auto_check_update(self):
+        if self.preferences.value['auto_check_updates']: self.check_update()
+
+    def check_update(self,manual=False):
+        if self._quitting or self.update_checking: return
+        self.update_checking=True; self.update_button.setEnabled(False)
+        self.update_status.setText('正在连接 GitHub 检查正式发布版…')
+        if manual:self.login_update_status.setText('正在检查更新…'); self.login_update_status.show()
+        self.tray_update.setEnabled(False)
+        task=Job(updates.check_latest); key=id(task)
+        def finish(value=None,error=None):
+            release_job(self,key); self.update_checking=False
+            if self._quitting: return
+            self.update_button.setEnabled(True); self.tray_update.setEnabled(True)
+            checked=now().strftime('%m-%d %H:%M')
+            if error:
+                self.update_status.setText('检查未完成：'+error+'（'+checked+'）')
+                if manual:
+                    self.notify('更新检查未完成：'+error,True)
+                    self.login_update_status.setText('更新检查未完成：'+error)
+                return
+            self.update_release=value
+            self.update_download.setVisible(value.available)
+            message=('发现新版本 '+value.version+'，可打开下载页下载安装包。' if value.available else '当前版本 '+updates.VERSION+' 已是最新可用版本。')
+            self.update_status.setText(message+'（检查于 '+checked+'）')
+            self.login_update_status.setText(message)
+            if value.available:self.login_update_status.show()
+            self.tray_download.setVisible(value.available)
+            if value.available:
+                self.tray_download.setText('下载新版本 '+value.version)
+                if value.version!=self.update_notified_version:
+                    self.update_notified_version=value.version
+                    self.desktop_notification('发现新版本 '+value.version,'请从托盘“下载新版本”或“外观与通知”打开下载页。')
+            if manual: self.notify(message)
+        connect_job(self,task,lambda value:finish(value),lambda error:finish(error=error)); self.update_pool.start(task)
+        if manual:
+            self.restore()
+            if self.root_stack.currentIndex()==1: self.go(5)
+
+    def open_update(self):
+        if not self.update_release or not self.update_release.available: return
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl(self.update_release.page))
 
     def save_preference(self,key,value):
         try: self.preferences.set(**{key:value})
@@ -513,6 +623,8 @@ class Window(QMainWindow):
             for key,action in self.tray_themes.items():
                 with QSignalBlocker(action): action.setChecked(key==value['theme'])
         if self.pages.currentIndex()==3: self.render_history()
+        from .window_chrome import apply_chrome
+        apply_chrome(self,p,value['theme'])
         self.sync_live_wallpaper()
 
     def sync_live_wallpaper(self):
@@ -524,6 +636,8 @@ class Window(QMainWindow):
         self.refresh_wallpaper(force=True)
 
     def showEvent(self,event):
+        from .window_chrome import apply_chrome
+        apply_chrome(self,self.theme_colors,self.preferences.value['theme'])
         super().showEvent(event);self.sync_live_wallpaper()
 
     def hideEvent(self,event):
@@ -591,6 +705,8 @@ class Window(QMainWindow):
             self.tray_theme_group.addAction(action); action.triggered.connect(lambda checked,k=key:self.set_theme(k)); self.tray_themes[key]=action
         self.tray_notify=menu.addAction('桌面通知'); self.tray_notify.setCheckable(True); self.tray_notify.setChecked(self.preferences.value['notifications'])
         self.tray_notify.triggered.connect(lambda checked:self.set_notification_preference(checked))
+        menu.addSeparator(); self.tray_update=menu.addAction('检查更新'); self.tray_update.triggered.connect(lambda:self.check_update(manual=True))
+        self.tray_download=menu.addAction('下载新版本'); self.tray_download.setVisible(False); self.tray_download.triggered.connect(self.open_update)
         menu.addSeparator(); leave = menu.addAction('退出界面（系统计划保留）'); leave.triggered.connect(self.quit_ui); self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda reason: self.restore() if reason in (QSystemTrayIcon.ActivationReason.DoubleClick, QSystemTrayIcon.ActivationReason.Trigger) else None)
         self.tray.messageClicked.connect(self.show_history)
@@ -660,14 +776,15 @@ class Window(QMainWindow):
     def notify(self, message, error=False):
         self.notice.setObjectName('Error' if error else 'Notice'); self.notice.style().unpolish(self.notice); self.notice.style().polish(self.notice); self.notice.setText(message); self.notice.show()
 
-    def job(self, label, operation, done=None):
+    def job(self, label, operation, done=None, *, plan_job=False):
         if self.busy: return
         self.busy = True; self.update_tray(); self.status_text.setText(label); self.progress.show(); self.login_progress.show()
         for control in self.controls: control.setEnabled(False)
         self.login_error.hide(); task = Job(operation); key = id(task)
         def finish(value=None, error=None):
             self.busy = False; release_job(self, key); self.progress.hide(); self.login_progress.hide()
-            if isinstance(value, dict) and 'task' in value: self.task_state = value['task'] or {}
+            if isinstance(value, dict) and 'task' in value: self.task_state = value['task'] or {};self.task_probe_error=''
+            if plan_job:self.configuration_error=error or ''
             for control in self.controls: control.setEnabled(True)
             self.status_text.setText('本机界面可关闭，系统计划继续保留。')
             self.refresh()
@@ -729,7 +846,7 @@ class Window(QMainWindow):
         if self.rendering or self.busy:return
         slot=self.account_combo.itemData(index)
         if not slot or slot==self.state['selected_profile']:return
-        self.authenticated=False;self.task_state=None
+        self.authenticated=False;self.task_state=None;self.configuration_error='';self.task_probe_error=''
         self.job('正在切换当前账号…',lambda:self.service.select_account(slot),lambda result:self.notify('已切换当前账号；两个账号的计划各自保留，未保存的时间不会应用。'))
 
     def remove_current_account(self):
@@ -737,19 +854,19 @@ class Window(QMainWindow):
         if not slot or self.busy:return
         answer=QMessageBox.question(self,'移除当前账号','将停用并移除 '+self.state['masked_id']+' 的本机计划和加密凭据。另一个账号不受影响。是否继续？',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
         if answer==QMessageBox.StandardButton.Yes:
-            self.authenticated=False;self.task_state=None
+            self.authenticated=False;self.task_state=None;self.configuration_error='';self.task_probe_error=''
             self.job('正在移除当前账号及其本机计划…',lambda:self.service.remove_account(slot))
 
     def switch(self, mode):
         if self.standard:
-            self.job('正在启用或修复当前账号的本机计划…',self.service.activate_local) if mode=='local' else self.notify('VPS 将在后续付费版开放。',True)
+            self.job('正在启用或修复当前账号的本机计划…',self.service.activate_local,plan_job=True) if mode=='local' else self.notify('VPS 将在后续付费版开放。',True)
             return
         if mode == 'local': self.job('正在确认 VPS 停用并切回本机…', self.service.activate_local)
         else: self.job('正在检查连接、停用本机并启用 VPS…', self.service.switch_cloud)
 
     def toggle_enabled(self, enabled):
         if self.rendering: return
-        self.job('正在恢复计划…' if enabled else '正在暂停计划…', self.service.resume if enabled else self.service.pause)
+        self.job('正在恢复计划…' if enabled else '正在暂停计划…', self.service.resume if enabled else self.service.pause,plan_job=True)
 
     def schedule_dirty(self):
         if self.rendering: return
@@ -762,7 +879,7 @@ class Window(QMainWindow):
 
     def apply_time(self):
         value = self.time_edit.time().toString('HH:mm')
-        self.job('正在更新计划和执行时间窗口…', lambda: self.service.save_schedule(value), lambda result: self.notify('当前账号的每日时间已保存，另一个账号不受影响。' if self.standard else '每日时间已保存。' + ('备用端待同步；切换前会再次同步。' if result['pending_sync'] else '两端配置已同步。')))
+        self.job('正在保存并校验系统计划…', lambda: self.service.save_schedule(value), lambda result: self.notify('每日时间已保存，系统任务已校验。' if self.standard else '每日时间已保存。'),plan_job=True)
 
     def check_vps(self): self.job('正在检查 VPS 连接与服务…', self.service.check_connection, self.connection_result)
 
@@ -860,13 +977,14 @@ class Window(QMainWindow):
             self.quick_cloud.setEnabled(False);self.detail_cloud.setEnabled(False)
             self.mode_hint.setText('普通版：两个账号均由本机执行。VPS 将在后续付费版开放。')
             self.page_subtitle.setText(('当前账号 '+self.state['masked_id']+' · 本机独立计划') if self.pages.currentIndex() in (0,1) else self.page_subtitle.text())
-        self.rendering = False; self.countdown(); self.update_tray()
+        self.rendering = False; self.render_plan_health(); self.update_tray()
         if self.pages.currentIndex() == 3: self.render_history()
 
     def probe_task(self):
         if self.busy or self.probing: return
         self.probing = True
         cloud = self.state['mode']=='cloud'
+        token=(self.state.get('selected_profile'),self.state['time'],self.state['enabled'])
         def operation():
             value=self.service.monitor()
             if cloud:
@@ -876,18 +994,64 @@ class Window(QMainWindow):
         task = Job(operation); key = id(task)
         def finish(value):
             self.probing = False
+            if token!=(self.state.get('selected_profile'),self.state['time'],self.state['enabled']):
+                release_job(self,key);QTimer.singleShot(100,self.probe_task);return
             if cloud:
                 self.remote_state = value or {}; self.poll_notifications((value or {}).get('events'))
-            else: self.task_state = (value or {}).get('task') or {}
+            else: self.task_state = (value or {}).get('task') or {};self.task_probe_error=(value or {}).get('error','')
             release_job(self, key); self.refresh()
         connect_job(self, task, finish, lambda message: finish({'error':message})); self.pool.start(task)
 
+    def configuration_problem(self):
+        if not self.state['configured']:return '尚未添加并验证学校账号。'
+        if not self.state.get('credential_ok',True):return '当前账号的加密凭据无法读取，请移除后重新验证。'
+        if not self.state.get('time_valid',True):return '当前时间不在 21:30–23:30 范围，请重新设置并保存。'
+        if self.configuration_error:return self.configuration_error
+        if not self.state['managed']:return '尚未接管系统任务，请先接管本机计划。'
+        if self.task_probe_error:return '无法读取 Windows 计划：'+self.task_probe_error
+        if self.state['mode']=='local' and self.state['enabled'] and self.task_state is not None:
+            task=self.task_state
+            if not task:return 'Windows 定时任务不存在，请点击本机运行修复。'
+            if task.get('state') not in ('Ready','Running'):return 'Windows 定时任务未启用，请点击本机运行修复。'
+            if task.get('schedule_time') and task['schedule_time']!=self.state['time']:return 'Windows 任务时间为 '+task['schedule_time']+'，与已保存的 '+self.state['time']+' 不一致，请重新保存。'
+            if task.get('description') and task['description']!=TASK_DESCRIPTION:return '同名任务来源不匹配，无法确认本机计划。'
+            if task.get('worker') and self.standard:
+                scheduler=self.service.schedulers.get(self.state.get('selected_profile'))
+                if hasattr(scheduler,'expected_action'):
+                    expected,args=scheduler.expected_action()
+                    if Path(task['worker']).resolve()!=Path(expected).resolve() or task.get('arguments')!=args:return '系统任务指向其他程序或账号，请点击本机运行修复。'
+        return ''
+
+    def render_plan_health(self):
+        problem=self.configuration_problem()
+        checking=self.state['enabled'] and self.task_state is None and self.state['mode']=='local'
+        self.configuration_notice.setVisible(bool(problem))
+        self.configuration_notice.setText('计划尚未配置成功：'+problem if problem else '')
+        status='error' if problem else 'checking' if checking else 'ok' if self.state['enabled'] else 'paused'
+        self.plan_pill.setProperty('health',status)
+        self.plan_pill.setText('! 需要修复' if problem else '正在校验' if checking else '已启用' if self.state['enabled'] else '已暂停')
+        self.plan_pill.style().unpolish(self.plan_pill);self.plan_pill.style().polish(self.plan_pill)
+        if problem:
+            self.today_detail.setText(problem)
+            if self.state.get('last_success')!=now().date().isoformat():self.today_status.setText('计划需要修复')
+        task=self.task_state or {};last_run=task.get('last_run','');feedback=''
+        if last_run[:10]==now().date().isoformat() and self.state.get('last_success')!=now().date().isoformat():
+            code=task.get('last_result')
+            if code==0:feedback='系统任务已结束，但本地尚无今日签到成功记录。请查看运行记录，并以学校系统结果为准。'
+            elif code is not None and code not in (267008,267009,267010,267011,267013):feedback='上次系统任务未成功完成（退出码 '+str(code)+'），请查看运行记录。'
+        self.execution_feedback.setText(feedback);self.execution_feedback.setVisible(bool(feedback))
+        self.countdown()
+
     def countdown(self):
-        if not hasattr(self, 'count_label'): return
-        if not self.state['enabled'] or not self.state['managed']:
-            self.count_label.setText('接管并启用后显示下次执行倒计时。' if not self.state['managed'] else '请恢复连接并确认运行端。' if self.state['mode']=='unknown' else '自动签到已暂停。'); return
-        following = datetime.fromisoformat(self.state['next_run']); remaining = max(0, int((following-now()).total_seconds()))
-        self.count_label.setText(f'距离下次执行 {remaining//3600:02d}:{remaining%3600//60:02d}:{remaining%60:02d}')
+        if not hasattr(self,'count_label'):return
+        if self.configuration_problem():self.count_label.setText('计划待修复 · 原因见下方提示');return
+        if not self.state['enabled']:self.count_label.setText('自动签到已暂停');return
+        if self.state['mode']=='local' and self.task_state is None:self.count_label.setText('正在校验系统任务…');return
+        current=now();hour,minute=map(int,self.state['time'].split(':'))
+        following=current.replace(hour=hour,minute=minute,second=0,microsecond=0)
+        if following<=current:following+=timedelta(days=1)
+        remaining=max(0,int((following-current).total_seconds()))
+        self.count_label.setText(f'距离下次执行  {remaining//3600:02d}:{remaining%3600//60:02d}:{remaining%60:02d}')
 
 
 def run(service=None):

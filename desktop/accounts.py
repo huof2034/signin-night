@@ -48,7 +48,7 @@ class StandardService(core.Service):
         if len(profiles)>LIMIT or any(slot not in SLOTS for slot in profiles): raise UserError('账号数量或标识无效。')
         for key,profile in profiles.items():
             profile.setdefault('legacy_history',key=='primary')
-            validate_time(profile['time'])
+            validate_time(profile['time'],existing=True)
             if any(type(profile.get(k)) is not bool for k in ('enabled','managed','auto_login')): raise UserError('账号计划配置无效。')
         if (profiles and value.get('selected') not in profiles) or (not profiles and value.get('selected') is not None): raise UserError('当前账号配置无效。')
         return value
@@ -101,7 +101,7 @@ class StandardService(core.Service):
         result={**profile,'mode':'local','pending_sync':False,'edition':'standard','account_limit':LIMIT,'accounts':accounts,
                 'selected_profile':slot,'configured':bool(slot),'credential_ok':bool(account),'masked_id':'****'+account['student_id'][-4:] if account else '凭据待修复' if slot else '',
                 'account_tag':hashlib.sha256(account['student_id'].encode()).hexdigest()[:16] if account else None,
-                'last_success':self.success(slot,account) if account else None,'local_enabled':profile['enabled'],
+                'last_success':self.success(slot,account) if account else None,'local_enabled':profile['enabled'],'time_valid':'21:30'<=profile['time']<='23:30',
                 'next_run':following.isoformat(),'now':current.isoformat(),'identity':profile.get('identity',{}),'data_dir':str(self.data)}
         self.settings=result
         if task:result['task']=self.schedulers[slot].info() if slot else None
@@ -173,29 +173,43 @@ class StandardService(core.Service):
             with external_lock(legacy_folder) if legacy_folder else contextlib.nullcontext():
                 backups={name:(legacy_folder/name).read_bytes() if (legacy_folder/name).exists() else None for name in ('enabled.json','desktop-managed.json')} if legacy_folder else {}
                 old_enabled=legacy.read_json(legacy_folder/'enabled.json',{}).get('enabled',False) if legacy_folder else False
-                stopped_old=False
+                stopped_old=False;task_changed=False;verified=None;fast=hasattr(task,'apply_verified')
+                actual=None if fast else task.info()
+                previous_enabled=actual.get('enabled',actual.get('state')!='Disabled') if actual else False
                 try:
-                    if takeover:
-                        task.apply(profile['time'],False);task.disable_old(self.old_root);stopped_old=True
+                    if slot=='primary' and (takeover or enabled is True):
+                        task.disable_old(self.old_root);stopped_old=True
                         if legacy_folder:
                             core.write_plain(legacy_folder/'enabled.json',{'enabled':False})
                             core.write_plain(legacy_folder/'desktop-managed.json',{'data_dir':str(self.data)})
-                    if profile['managed']:task.apply(profile['time'],profile['enabled'])
+                    if profile['managed']:
+                        task_changed=True
+                        if fast:verified=task.apply_verified(profile['time'],profile['enabled'])
+                        else:task.apply(profile['time'],profile['enabled'])
                     self.write_store(value)
+                    persisted=self.store()['profiles'][slot]
+                    if any(persisted[k]!=profile[k] for k in ('time','enabled','managed')):raise UserError('计划配置写入后校验失败，已回滚系统任务。')
                 except Exception:
-                    try:task.apply(old['time'],old['enabled'] and old['managed'])
-                    except Exception:
-                        self.event('error','系统计划回滚未确认，请检查该账号的任务状态。',profile_id=slot)
+                    try:self.write_store(previous)
+                    except Exception:self.event('error','账号计划配置回滚未确认，请检查保存的时间与启用状态。',profile_id=slot)
+                    if task_changed:
+                        try:
+                            if fast:task.restore_previous()
+                            else:task.apply(old['time'],previous_enabled)
+                        except Exception:
+                            self.event('error','系统计划回滚未确认，请检查该账号的任务状态。',profile_id=slot)
                     if legacy_folder:
                         for name,content in backups.items():
                             path=legacy_folder/name
                             if content is None:path.unlink(missing_ok=True)
                             else:path.write_bytes(content)
-                    if stopped_old and old_enabled:task.restore_old()
+                    if stopped_old:task.restore_old()
                     raise
             self.account_event(slot,'schedule' if scheduled is not None else 'mode' if enabled else 'pause',
                                f'每日计划已保存：北京时间 {profile["time"]}，'+('已启用。' if profile['enabled'] else '已暂停。'))
-        return self.status(task=True)
+        result=self.status()
+        result['task']=verified if verified is not None else task.info()
+        return result
 
     def save_schedule(self, scheduled): return self.update_plan(scheduled=scheduled)
     def activate_local(self): return self.update_plan(enabled=True)
@@ -239,6 +253,8 @@ class StandardService(core.Service):
             profile=self.store()['profiles'].get(slot)
             if not profile or not profile['managed'] or not profile['enabled']:return 0
             current=now()
+            if not '21:30'<=profile['time']<='23:30':
+                self.account_event(slot,'failed','计划时间不在新版允许的 21:30–23:30 范围，请重新设置。');return 1
             if not within_window(current,profile['time']):return 0
             account=self.account(slot)
             if self.success(slot,account)==current.date().isoformat():
@@ -261,6 +277,7 @@ class StandardService(core.Service):
                 result=asyncio.run(legacy.perform(module,account))
                 if result.get('success'):
                     legacy.write_json(self.success_path(slot),{'student_id':account['student_id'],'date':current.date().isoformat()})
+                    if self.success(slot,account)!=current.date().isoformat():raise UserError('学校已返回成功，但本地成功记录未能保存，请在学校系统核实结果。')
                     self.account_event(slot,'success','学校系统已确认今日签到成功。');return 0
                 self.account_event(slot,'failed','学校系统未确认签到成功，请查看该账号的日志。');return 1
             except Exception as exc:

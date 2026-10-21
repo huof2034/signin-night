@@ -22,7 +22,7 @@ def driver():
     with tempfile.TemporaryDirectory(prefix='ahut-standard-runtime-') as folder,patch.object(core,'execute',return_value=Mock(returncode=0,stdout='',stderr='')),patch.object(core.Service,'_sid',return_value='S-1-5-21-1'),patch.object(legacy,'perform',side_effect=AssertionError('No sign-in allowed')):
         tasks={slot:Scheduler() for slot in accounts.SLOTS};service=FakeSchool(data=Path(folder)/'data',migrate=False,scheduler_factory=tasks.get)
         service.login('259099999','correct-test',False);service.resume()
-        Preferences(service.data).set(theme='light',startup_animation=False)
+        Preferences(service.data).set(theme='light',startup_animation=False,auto_check_updates=False)
         app=QApplication.instance() or QApplication([]);result={'stage':0,'error':None};poll=QTimer();poll.setInterval(35)
         def tick():
             try:
@@ -50,12 +50,22 @@ def driver():
                         w.set_theme(theme);assert w.time_edit.text()=='22:00'
                     w.go(4);assert w.page_heading.text()=='账号管理';assert not w.quick_cloud.isEnabled() and not w.detail_cloud.isEnabled()
                     assert w.time_edit.lineEdit().width()>80;assert w.password_edit.text()==''
-                    poll.stop();result['stage']=7;w.quit_ui()
+                    w.time_edit.setCurrentSection(w.time_edit.Section.MinuteSection);w.time_edit.setTime(QTime(22,0));w.time_edit.stepDown();assert w.time_edit.time()==QTime(21,59)
+                    assert w.time_edit.minimumTime()==QTime(21,30) and w.time_edit.maximumTime()==QTime(23,30)
+                    from desktop import updates
+                    fake=updates.Release('1.6.0',updates.REPOSITORY+'/releases/tag/v1.6.0','',True)
+                    with patch.object(updates,'check_latest',return_value=fake):
+                        result['stage']=7;w.check_update(manual=True);w.update_pool.waitForDone(2000)
+                elif stage==7:
+                    if w.update_checking:return
+                    assert w.update_download.isVisible() and w.tray_download.isVisible() and '1.6.0' in w.update_status.text()
+                    assert not w.busy and not tasks['primary'].enabled and tasks['secondary'].enabled
+                    poll.stop();result['stage']=8;w.quit_ui()
             except Exception as exc:result['error']=type(exc).__name__;poll.stop();app.quit()
         poll.timeout.connect(tick);poll.start();watchdog=QTimer();watchdog.setSingleShot(True)
         def timeout():result['error']='Timeout';app.quit()
         watchdog.timeout.connect(timeout);watchdog.start(20_000);gui.run(service)
-        assert result=={'stage':7,'error':None},result
+        assert result=={'stage':8,'error':None},result
         if sys.stdout:print('standard-two-account-runtime: passed; no real school or scheduler access')
 
 

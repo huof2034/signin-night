@@ -25,10 +25,10 @@ class StandardUiTests(TestCase):
         self.verify=patch.object(self.service,'_verify',new=AsyncMock(return_value='测试账号'));self.verify.start()
         self.service.login('259099999','offline',False);self.service.resume();self.service.login('259088888','offline',False,profile_id=None)
         from desktop.appearance import Preferences
-        Preferences(self.service.data).set(theme='light',startup_animation=False)
+        Preferences(self.service.data).set(theme='light',startup_animation=False,auto_check_updates=False)
         self.window=gui.Window(self.service);self.window.show();self.window.enter_offline();self.app.processEvents()
     def tearDown(self):
-        w=self.window;w.refresh_timer.stop();w.task_timer.stop();w.countdown_timer.stop();w.event_timer.stop();w.wallpaper_timer.stop();w.pool.waitForDone(2000);self.app.processEvents();w.tray.hide();w._quitting=True;w.close();w.deleteLater();self.app.processEvents()
+        w=self.window;w.refresh_timer.stop();w.task_timer.stop();w.countdown_timer.stop();w.event_timer.stop();w.wallpaper_timer.stop();w.update_timer.stop();w.update_start_timer.stop();w.update_pool.waitForDone(2000);w.pool.waitForDone(2000);self.app.processEvents();w.tray.hide();w._quitting=True;w.close();w.deleteLater();self.app.processEvents()
         self.verify.stop();self.execution.stop();self.sid.stop();legacy.DATA,legacy.ACCOUNT,legacy.ROOT=self.original;self.tmp.cleanup()
     def wait_job(self):
         for _ in range(120):

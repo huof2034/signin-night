@@ -19,7 +19,7 @@ THEMES = {'light': '浅色', 'dark': '夜间', 'system': '跟随系统', 'wallpa
 DEFAULTS = dict(theme='wallpaper', startup_animation=True, notifications=True,
                 notify_success=True, notify_failed=True, notify_mode=True,
                 close_to_tray=True, engine_path='', accent='#3478ed', wallpaper_dark=True,
-                surface_transparency=14)
+                surface_transparency=14, auto_check_updates=True)
 
 
 def surface_transparency(value):
@@ -129,6 +129,8 @@ QPushButton#Primary:hover {{ background:{QColor(p['accent']).lighter(112).name()
 QPushButton#Primary:disabled {{ background:{blend(p['accent'],p['surface'],.50)}; border-color:{p['border']}; }}
 QPushButton#Nav:checked,QPushButton#Mode:checked {{ color:{p['accent_text']}; }}
 QCheckBox::indicator:checked {{ image:none; background:{p['accent']}; border:3px solid {p['accent']}; }}
+QLabel#PlanPill[health="error"] {{ background:{p['error_bg']}; color:{p['error']}; }}
+QLabel#PlanPill[health="checking"],QLabel#PlanPill[health="paused"] {{ background:{p['soft']}; color:{p['muted']}; }}
 QLabel#Unverified {{ background:{p['soft']}; color:{p['muted']}; border-radius:7px; padding:5px 10px; font-size:11px; }}
 QComboBox {{ background:{p['input']}; color:{p['text']}; border:1px solid {p['border']}; border-radius:8px; padding:8px 26px 8px 12px; min-height:20px; }}
 QComboBox::drop-down {{ width:24px; border:0; }}

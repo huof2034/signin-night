@@ -38,16 +38,17 @@ def now():
     return datetime.now(CHINA)
 
 
-def validate_time(value):
+def validate_time(value, *, existing=False):
     if not isinstance(value, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value):
         raise UserError('请选择有效的小时和分钟。')
-    if value < '21:20':
-        raise UserError('当前适配脚本要求 21:20 后执行；实际开放时段仍以学校系统为准。')
+    lower,upper=('21:20','23:59') if existing else ('21:30','23:30')
+    if not lower<=value<=upper:
+        raise UserError('请选择北京时间 21:30–23:30 之间的签到时间。')
     return value
 
 
 def within_window(instant, scheduled, minutes=15):
-    hour, minute = map(int, validate_time(scheduled).split(':'))
+    hour, minute = map(int, validate_time(scheduled,existing=True).split(':'))
     instant = instant.astimezone(CHINA)
     start = instant.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return start <= instant < min(start + timedelta(minutes=minutes), start.replace(hour=23, minute=59, second=59, microsecond=999999))
@@ -140,47 +141,83 @@ class WindowsTask:
         self.name = name
         self.profile_id = profile_id
 
-    def apply(self, scheduled, enabled):
-        validate_time(scheduled)
-        if self.worker or getattr(sys, 'frozen', False):
-            executable, arguments = self.worker or sys.executable, '--scheduled'
+    def expected_action(self):
+        if self.worker or getattr(sys,'frozen',False):
+            executable,arguments=self.worker or sys.executable,'--scheduled'
         else:
-            executable = str(Path(sys.executable).with_name('pythonw.exe'))
-            arguments = '"' + str(ROOT / 'desktop_main.py') + '" --scheduled'
+            executable=str(Path(sys.executable).with_name('pythonw.exe'))
+            arguments='"'+str(ROOT/'desktop_main.py')+'" --scheduled'
         if self.profile_id:
-            if self.profile_id not in ('primary', 'secondary'): raise UserError('账号标识无效。')
-            arguments += ' --profile ' + self.profile_id
-        script = f"""
-$name={quote_ps(self.name)};$description={quote_ps(TASK_DESCRIPTION)}
-$existing=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-if($existing -and $existing.Description -ne $description){{throw 'Conflicting scheduled task'}}
-$action=New-ScheduledTaskAction -Execute {quote_ps(executable)} -Argument {quote_ps(arguments)}
-$trigger=New-ScheduledTaskTrigger -Daily -At {quote_ps(scheduled)}
-$trigger.StartBoundary=[DateTime]::Today.ToString('yyyy-MM-dd')+'T{scheduled}:00+08:00'
-$principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
-$settings=New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-$settings.Enabled=${str(bool(enabled)).lower()}
-Register-ScheduledTask -TaskName $name -Description $description -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-if(${str(bool(enabled)).lower()}){{Enable-ScheduledTask -TaskName $name | Out-Null}}else{{Disable-ScheduledTask -TaskName $name | Out-Null}}
-$actual=Get-ScheduledTask -TaskName $name
-if($actual.Settings.Enabled -ne ${str(bool(enabled)).lower()}){{throw 'Scheduled task enable state was not confirmed'}}
-"""
-        ps(script)
+            if self.profile_id not in ('primary','secondary'):raise UserError('账号标识无效。')
+            arguments+=' --profile '+self.profile_id
+        return executable,arguments
+
+    def apply_verified(self, scheduled, enabled):
+        from . import task_backend
+        validate_time(scheduled);self._snapshot_available=False
+        return task_backend.apply(self,scheduled,enabled,*self.expected_action())
+
+    def apply(self, scheduled, enabled):return self.apply_verified(scheduled,enabled)
+
+    def restore_previous(self):
+        from . import task_backend
+        return task_backend.restore(self)
 
     def disable(self):
         ps(f"$t=Get-ScheduledTask -TaskName {quote_ps(self.name)} -ErrorAction SilentlyContinue;if($t){{if($t.Description -ne {quote_ps(TASK_DESCRIPTION)}){{throw 'Conflicting task'}};Disable-ScheduledTask -TaskName {quote_ps(self.name)} | Out-Null}}")
 
     def info(self):
-        output = ps(f"$t=Get-ScheduledTask -TaskName {quote_ps(self.name)} -ErrorAction SilentlyContinue;if($t){{$i=Get-ScheduledTaskInfo -TaskName {quote_ps(self.name)};@{{state=$t.State.ToString();next_run=$i.NextRunTime.ToString('o');last_result=$i.LastTaskResult}}|ConvertTo-Json -Compress}}else{{'null'}}").stdout
-        return json.loads(output or 'null')
+        from . import task_backend
+        return task_backend.info(self)
+
+    @staticmethod
+    def validate_legacy(value, old_root):
+        import ntpath
+        description=value.get('description','')
+        expected='Managed by AHUT-WQQD at '+str(old_root)
+        if description==expected:folder=str(old_root)
+        else:
+            prefixes=('Managed by AHUT-WQQD Desktop v1 at ','Managed by AHUT-WQQD-DSH isolated alpha at ')
+            prefix=next((item for item in prefixes if description.startswith(item)),None)
+            if not prefix:raise UserError('检测到无法识别来源的旧计划，已保留原任务。请先在旧程序中停用计划。')
+            folder=description[len(prefix):]
+        script=ntpath.join(folder,'run-task.ps1')
+        arguments='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+script+'"'
+        actions=value.get('actions',[])
+        executable=actions[0].get('execute','') if len(actions)==1 else ''
+        powershell=str(Path(os.environ.get('WINDIR',r'C:\Windows'))/'System32'/'WindowsPowerShell'/'v1.0'/'powershell.exe')
+        if not ntpath.isabs(folder) or len(actions)!=1 or ntpath.normcase(executable) not in ('powershell.exe',ntpath.normcase(powershell)) or actions[0].get('arguments','')!=arguments:
+            raise UserError('旧计划的执行路径与来源标记不匹配，已停止接管，原任务保持不变。')
+        return {**value,'root':folder}
+
+    def legacy_info(self, old_root):
+        script="""$t=Get-ScheduledTask -TaskName 'AHUT-WQQD-2200' -ErrorAction SilentlyContinue
+if($t){@{description=$t.Description;enabled=[bool]$t.Settings.Enabled;state=$t.State.ToString();actions=@($t.Actions|ForEach-Object {@{execute=$_.Execute;arguments=$_.Arguments}})}|ConvertTo-Json -Depth 4 -Compress}else{'null'}"""
+        value=json.loads(ps(script).stdout.strip() or 'null')
+        return self.validate_legacy(value,old_root) if value else None
+
+    def _set_legacy(self, value, enabled):
+        action=value['actions'][0]
+        command='Enable-ScheduledTask' if enabled else 'Disable-ScheduledTask'
+        script=f"""$t=Get-ScheduledTask -TaskName 'AHUT-WQQD-2200' -ErrorAction SilentlyContinue
+if(-not $t -or $t.Description -ne {quote_ps(value['description'])} -or $t.Actions.Count -ne 1 -or $t.Actions[0].Execute -ne {quote_ps(action['execute'])} -or $t.Actions[0].Arguments -ne {quote_ps(action['arguments'])}){{throw 'Legacy task changed'}}
+{command} -TaskName 'AHUT-WQQD-2200' | Out-Null
+$t=Get-ScheduledTask -TaskName 'AHUT-WQQD-2200'
+if($t.Settings.Enabled -ne ${str(bool(enabled)).lower()}){{throw 'Legacy task state not confirmed'}}
+Write-Output 'ok'"""
+        try:ps(script)
+        except UserError:raise UserError('无法更改旧计划：任务状态已变化或当前 Windows 用户权限不足。请检查任务计划程序后重试。') from None
 
     def disable_old(self, old_root):
-        expected = 'Managed by AHUT-WQQD at ' + str(old_root)
-        script = f"$t=Get-ScheduledTask -TaskName 'AHUT-WQQD-2200' -ErrorAction SilentlyContinue;if($t){{if($t.Description -ne {quote_ps(expected)}){{throw 'Unrelated legacy task'}};Disable-ScheduledTask -TaskName 'AHUT-WQQD-2200' | Out-Null}}"
-        ps(script)
+        self._legacy_before=None
+        value=self.legacy_info(old_root)
+        if value and value['enabled']:
+            if value['state']=='Running':raise UserError('旧版签到任务正在执行，请等待完成后再接管。')
+            self._set_legacy(value,False);self._legacy_before=value
+        return value
 
     def restore_old(self):
-        ps("Enable-ScheduledTask -TaskName 'AHUT-WQQD-2200' | Out-Null")
+        if getattr(self,'_legacy_before',None):self._set_legacy(self._legacy_before,True)
 
 
 class SystemdTask:
@@ -247,7 +284,7 @@ class Service:
         if not isinstance(self.settings, dict):
             raise UserError('计划配置损坏，请保留原文件后修复。')
         self.settings = {**defaults, **self.settings}
-        validate_time(self.settings['time'])
+        validate_time(self.settings['time'],existing=True)
         if self.settings['mode'] not in ('local', 'cloud', 'unknown') or any(type(self.settings[k]) is not bool for k in ('enabled','managed','pending_sync','auto_login')):
             raise UserError('计划配置无效，已停止启动。')
         if not (self.data / 'desktop.json').exists():

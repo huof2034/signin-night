@@ -124,7 +124,7 @@ class AccountTests(TestCase):
         messages=EventNotifications(started).consume(self.service.history(),prefs);self.assertIn('账号 2',messages[0][1]);self.assertIn('8888',messages[0][1])
 
     def test_windows_tasks_have_distinct_names_and_explicit_profile_arguments(self):
-        with patch.object(core,'ps',return_value=Mock(stdout='null')) as ps:
+        with patch.object(core,'ps',return_value=Mock(stdout=json.dumps({'ok':True,'task':{'state':'Ready'},'previous_xml':None}))) as ps:
             core.WindowsTask(worker='C:/app/app.exe',name=core.TASK+'-Secondary',profile_id='secondary').apply('22:10',True)
         text=ps.call_args.args[0];self.assertIn('--scheduled --profile secondary',text);self.assertIn(core.TASK+'-Secondary',text);self.assertIn('22:10:00+08:00',text)
 

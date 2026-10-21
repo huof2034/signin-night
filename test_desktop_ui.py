@@ -45,7 +45,7 @@ class QtTests(unittest.TestCase):
     def test_pages_and_daily_time_editor(self):
         self.window.enter_offline(); self.window.go(1); self.app.processEvents()
         self.assertEqual(self.window.page_heading.text(),'定时设置')
-        self.assertEqual(self.window.time_edit.minimumTime(),QTime(21,20))
+        self.assertEqual(self.window.time_edit.minimumTime(),QTime(21,30))
         self.window.time_edit.setTime(QTime(22,10)); self.assertIn('未保存',self.window.schedule_saved.text())
         self.window.go(4); self.assertEqual(self.window.page_heading.text(),'账号与连接')
 
@@ -106,7 +106,7 @@ class QtTests(unittest.TestCase):
     def test_disabled_system_task_is_reported_as_needing_repair(self):
         self.service.settings.update(enabled=True,managed=True); self.service.save(); self.service.flag(True)
         self.window.task_state={'state':'Disabled'}; self.window.refresh()
-        self.assertEqual(self.window.plan_pill.text(),'需要修复')
+        self.assertIn('需要修复',self.window.plan_pill.text())
 
     def test_status_refresh_does_not_submit_a_pause_or_resume(self):
         with patch.object(self.service,'resume') as resume,patch.object(self.service,'pause') as pause:
