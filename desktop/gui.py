@@ -401,6 +401,9 @@ class Window(QMainWindow):
         page = QWidget(); outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(18)
         self.configuration_notice=text('', 'Error', True);self.configuration_notice.setVisible(False);outer.addWidget(self.configuration_notice)
         self.execution_feedback=text('', 'Warning', True);self.execution_feedback.setVisible(False);outer.addWidget(self.execution_feedback)
+        self.repair_record_button=self.add_control(button('从成功日志修复本地记录','logs'))
+        self.repair_record_button.setVisible(False);self.repair_record_button.clicked.connect(self.repair_records)
+        outer.addWidget(self.repair_record_button,alignment=Qt.AlignmentFlag.AlignLeft)
         top = QHBoxLayout(); top.setSpacing(16)
         frame, box = card(); head = QHBoxLayout(); head.addWidget(text('下一次签到', 'Section')); head.addStretch(); self.plan_pill = PlanPill(); head.addWidget(self.plan_pill); box.addLayout(head)
         self.big_time = text('22:00', 'Time'); box.addWidget(self.big_time); self.next_label = text('', 'Muted'); box.addWidget(self.next_label); self.count_label = text('', 'Countdown', True); box.addWidget(self.count_label); box.addSpacing(5)
@@ -896,6 +899,9 @@ class Window(QMainWindow):
         value = self.time_edit.time().toString('HH:mm')
         self.job('正在保存并校验系统计划…', lambda: self.service.save_schedule(value), lambda result: self.notify('每日时间已保存，系统任务已校验。' if self.standard else '每日时间已保存。'),plan_job=True)
 
+    def repair_records(self):
+        if self.standard:self.job('正在核对本机成功日志与账号归属…',self.service.recover_record,lambda result:self.notify('已核对并恢复可验证的本地记录，未重新提交签到。'))
+
     def check_vps(self): self.job('正在检查 VPS 连接与服务…', self.service.check_connection, self.connection_result)
 
     def connection_result(self, result):
@@ -923,13 +929,13 @@ class Window(QMainWindow):
         term = self.log_filter.text().strip().lower()
         entries = [entry for entry in entries if term in json.dumps(entry, ensure_ascii=False).lower()]
         self.history_table.setRowCount(len(entries)); self.empty_history.setVisible(not entries)
-        kinds = {'login':'账号验证','migration':'配置迁移','mode':'模式切换','schedule':'时间设置','running':'开始执行','success':'签到成功','failed':'签到失败','error':'需要处理','pause':'暂停计划','skipped':'跳过执行','deploy':'备用部署','connection':'连接设置'}
+        kinds = {'login':'账号验证','migration':'配置迁移','mode':'模式切换','schedule':'时间设置','running':'开始执行','success':'签到成功','failed':'签到失败','record_failed':'回执保存失败','record_recovered':'记录恢复','error':'需要处理','pause':'暂停计划','skipped':'跳过执行','deploy':'备用部署','connection':'连接设置'}
         for row, entry in enumerate(entries):
             timestamp = entry.get('at', '')[:19].replace('T', ' ')
             values = [timestamp, kinds.get(entry.get('kind'), '配置更新'), {'local':'本机','cloud':'VPS'}.get(entry.get('mode'), '—'), (entry.get('account_label','')+'  ' if entry.get('account_label') else '')+entry.get('message', '')]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if entry.get('kind') in ('failed','error'): item.setForeground(QColor(self.theme_colors['error']))
+                if entry.get('kind') in ('failed','error','record_failed'): item.setForeground(QColor(self.theme_colors['error']))
                 elif entry.get('kind') == 'success': item.setForeground(QColor(self.theme_colors['success']))
                 self.history_table.setItem(row, column, item)
         self.history_table.resizeRowsToContents()
@@ -950,12 +956,15 @@ class Window(QMainWindow):
         success = self.state['last_success'] == now().date().isoformat()
         self.today_status.setText('今日已完成' if success else '尚未接管' if not self.state['managed'] else '运行端待确认' if self.state['mode']=='unknown' else '计划已暂停' if not self.state['enabled'] else '等待执行')
         self.today_detail.setText('学校系统已有今日成功记录。' if success else '旧版安排保留，接管后由新版管理。' if not self.state['managed'] else '计划会在设定时间由系统触发。' if self.state['enabled'] else '恢复计划后继续每日执行。')
+        if success and self.state.get('success_source')=='log_recovery':self.today_detail.setText('已从当次成功执行日志恢复本地记录；本次未重新提交签到，也未重新联网核验。')
         selected_history=[e for e in self.service.history() if not self.standard or
             (e.get('account_tag') and e.get('account_tag')==self.state['account_tag']) or
+            (e.get('credential_tag') and e.get('credential_tag')==self.state.get('credential_tag') and e.get('profile_id')==self.state.get('selected_profile')) or
             (not e.get('account_tag') and self.state.get('legacy_history',False) and e.get('profile_id') in (None,'primary'))]
-        latest = next((entry for entry in selected_history if entry.get('at','')[:10] == now().date().isoformat() and entry.get('kind') in ('failed','running')), None)
+        latest = next((entry for entry in selected_history if entry.get('at','')[:10] == now().date().isoformat() and entry.get('kind') in ('failed','running','skipped','record_failed')), None)
+        self.latest_execution=latest
         if not success and latest and self.state['mode']=='local' and self.state['enabled']:
-            self.today_status.setText('签到未确认' if latest['kind']=='failed' else '正在执行')
+            self.today_status.setText({'failed':'签到未确认','running':'正在执行','skipped':'本次未执行','record_failed':'结果保存失败'}[latest['kind']])
             self.today_detail.setText(latest['message'])
         for item in [self.quick_local,self.detail_local]: item.setChecked(self.state['mode'] == 'local')
         for item in [self.quick_cloud,self.detail_cloud]: item.setChecked(self.state['mode'] == 'cloud')
@@ -965,8 +974,11 @@ class Window(QMainWindow):
         if edited == previous['time'] or previous['time'] != self.state['time'] or previous.get('selected_profile')!=self.state.get('selected_profile') or previous.get('account_tag')!=self.state.get('account_tag'):
             self.time_edit.setTime(QTime.fromString(self.state['time'],'HH:mm'))
         self.schedule_saved.setText(('有未保存的更改：' + edited) if self.time_edit.time().toString('HH:mm') != self.state['time'] else self.saved_text())
-        entries = selected_history; last = next((entry for entry in entries if entry['kind'] in ('success','failed','running','skipped')), None)
+        entries = selected_history; last = next((entry for entry in entries if entry['kind'] in ('success','failed','running','skipped','record_failed','record_recovered')), None)
         self.recent_label.setText((last['at'][:19].replace('T',' ') + '  ' + last['message']) if last else '暂时没有签到执行记录。首次执行后将在这里显示结果。')
+        if success and (not last or last.get('at','')[:10]!=now().date().isoformat() or last.get('kind') not in ('success','record_recovered','skipped')):
+            stamp=(self.state.get('success_confirmed_at') or self.state['last_success'])[:19].replace('T',' ')
+            self.recent_label.setText(stamp+'  '+('已从成功日志恢复本地记录，未重新提交签到。' if self.state.get('success_source')=='log_recovery' else '本地成功回执已保存。'))
         self.task_details.setText('当前计划：每天北京时间 ' + self.state['time'] + '\n执行窗口随配置调整，不再固定为 22:00。')
         if self.state['mode'] == 'local' and self.state['managed']:
             actual = (self.task_state or {}).get('state')
@@ -1052,9 +1064,15 @@ class Window(QMainWindow):
         task=self.task_state or {};last_run=task.get('last_run','');feedback=''
         if last_run[:10]==now().date().isoformat() and self.state.get('last_success')!=now().date().isoformat():
             code=task.get('last_result')
-            if code==0:feedback='系统任务已结束，但本地尚无今日签到成功记录。请查看运行记录，并以学校系统结果为准。'
+            if code==0:
+                skipped=getattr(self,'latest_execution',None)
+                if skipped and skipped.get('skip_reason') and skipped.get('at','')[:16]==last_run[:16]:feedback=skipped['message']
+                else:feedback='系统任务已结束，但本地尚无今日签到成功记录。请查看运行记录，并以学校系统结果为准。'
             elif code is not None and code not in (267008,267009,267010,267011,267013):feedback='上次系统任务未成功完成（退出码 '+str(code)+'），请查看运行记录。'
         self.execution_feedback.setText(feedback);self.execution_feedback.setVisible(bool(feedback))
+        latest=getattr(self,'latest_execution',None) or {}
+        can_repair=(task.get('last_result')==0 and not latest.get('skip_reason')) or (task.get('last_result')==1 and (latest.get('kind')=='record_failed' or latest.get('skip_reason')=='record_pending'))
+        self.repair_record_button.setVisible(bool(feedback) and self.standard and self.state.get('credential_ok',False) and can_repair)
         self.countdown()
 
     def countdown(self):

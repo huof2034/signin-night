@@ -2,7 +2,7 @@
 
 安徽工业大学晚寝考勤桌面助手。Windows 普通版支持两个账号独立定时、在线账号验证、系统托盘、结果通知，以及浅色、夜间、跟随系统和 Wallpaper Engine 动态壁纸主题。
 
-**[下载最新版 Windows 安装包](https://github.com/huof2034/signin-night/releases/latest/download/AHUTSignIn-Setup-1.5.1-x64.exe)** · [全部版本](https://github.com/huof2034/signin-night/releases) · [中文使用说明](docs/使用说明.md)
+**[下载最新版 Windows 安装包](https://github.com/huof2034/signin-night/releases/latest/download/AHUTSignIn-Setup-1.5.2-x64.exe)** · [全部版本](https://github.com/huof2034/signin-night/releases) · [中文使用说明](docs/使用说明.md)
 
 ## 免责声明与使用限制
 
@@ -15,7 +15,7 @@
 
 ## 安装与开始使用
 
-1. 下载 `AHUTSignIn-Setup-1.5.1-x64.exe`，在 Windows 10/11 x64 上运行。安装到当前用户目录，无需另外安装 Python 或 Node.js。
+1. 下载 `AHUTSignIn-Setup-1.5.2-x64.exe`，在 Windows 10/11 x64 上运行。安装到当前用户目录，无需另外安装 Python 或 Node.js。
 2. 打开“晚安助手”，输入自己的学号和学校考勤密码，点击“验证并进入”。首次添加账号必须联网验证；验证操作不会提交签到。
 3. 考勤系统默认密码为：`Ahgydx@920`。这只是提示，不会自动填入；若已修改密码，请输入自己的密码。
 4. 在定时设置中选择北京时间，启用自动签到。默认时间为每天 **22:00**，新添加账号的计划需要自行启用。
@@ -43,6 +43,8 @@
 
 安装包暂未购买代码签名证书。可使用发布页 `SHA256SUMS.txt` 校验文件。Windows 10/11 x64 为目标平台，当前发布检查在 Windows 11 x64 完成；学校接口、网络、驱动和 Wallpaper Engine 项目兼容性可能影响实际使用。请查看日志并以学校系统确认的结果为准。
 
+1.5.2 修复本地签到结果保存：收到学校成功响应即写入独立回执，旧成功文件损坏或写入失败时可读取回执；后续清理异常不会丢失已确认结果。主页提供“从成功日志修复本地记录”，仅恢复与当前账号和任务对应的证据，标明恢复来源，不重新提交签到。跳过执行会记录原因，运行事件按跨进程锁写入并同步落盘。
+
 ## 从源码构建
 
 需要 Windows x64、Python 3.14 x64、Node.js x64。依赖及构建脚本在仓库中，运行时无需开发环境。
@@ -60,7 +62,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop\build-installer.ps1
 离线回归测试（不会提交学校签到）：
 
 ```powershell
-.\.desktop-venv\Scripts\python.exe -B -m unittest test_offline test_desktop test_desktop_ui test_appearance test_live_wallpaper test_login_runtime test_accounts test_accounts_ui test_release test_takeover test_updates test_software_updates test_titlebar
+.\.desktop-venv\Scripts\python.exe -B -m unittest test_offline test_desktop test_desktop_ui test_appearance test_live_wallpaper test_login_runtime test_accounts test_accounts_ui test_release test_takeover test_updates test_software_updates test_titlebar test_records test_record_ui
 .\.desktop-venv\Scripts\python.exe -B test_accounts_runtime.py
 ```
 

@@ -4,7 +4,7 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !ifndef VERSION
-!define VERSION "1.5.1"
+!define VERSION "1.5.2"
 !endif
 Name "晚安助手"
 OutFile "..\dist\AHUTSignIn-Setup-${VERSION}-x64.exe"
@@ -13,7 +13,7 @@ InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AHUTS
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 BrandingText "晚安助手 · AHUT"
-VIProductVersion "1.5.1.0"
+VIProductVersion "1.5.2.0"
 VIAddVersionKey /LANG=2052 "ProductName" "晚安助手安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "FileDescription" "晚安助手 Windows x64 安装程序"

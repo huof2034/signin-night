@@ -7,7 +7,7 @@ import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-VERSION = '1.5.1'
+VERSION = '1.5.2'
 REPOSITORY = 'https://github.com/huof2034/signin-night'
 API = 'https://api.github.com/repos/huof2034/signin-night/releases/latest'
 MAX_BYTES = 512_000

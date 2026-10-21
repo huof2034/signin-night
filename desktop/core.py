@@ -17,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -326,10 +327,17 @@ class Service:
         entry = {'at': now().isoformat(), 'kind': kind, 'message': message, **details}
         path = self.data / 'events.jsonl'
         with self.mutex:
-            if path.exists() and path.stat().st_size > 2_000_000:
-                backup = path.with_suffix('.previous.jsonl'); backup.unlink(missing_ok=True); path.replace(backup)
-            with path.open('a', encoding='utf-8') as handle:
-                handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+            for attempt in range(20):
+                try:
+                    with external_lock(self.data/'events-store'):
+                        if path.exists() and path.stat().st_size > 2_000_000:
+                            backup = path.with_suffix('.previous.jsonl'); backup.unlink(missing_ok=True); path.replace(backup)
+                        with path.open('a', encoding='utf-8') as handle:
+                            handle.write(json.dumps(entry, ensure_ascii=False) + '\n');handle.flush();os.fsync(handle.fileno())
+                    break
+                except UserError:
+                    if attempt==19:raise
+                    time.sleep(.025)
         if not WINDOWS:
             path.chmod(0o600); legacy.linux_owner(path)
 

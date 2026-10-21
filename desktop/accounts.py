@@ -11,6 +11,7 @@ from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
 
 from . import core
+from . import records
 from .core import legacy, UserError, now, CHINA, external_lock, validate_time, within_window
 
 SLOTS = ('primary', 'secondary')
@@ -79,8 +80,34 @@ class StandardService(core.Service):
     def success_path(self, slot): return self.data/('last-success.json' if slot=='primary' else 'last-success-secondary.json')
 
     def success(self, slot, account):
-        record=legacy.read_json(self.success_path(slot), {})
-        return record.get('date') if record.get('student_id')==account['student_id'] else None
+        return records.success_record(self.data,slot,account,now().date().isoformat()).get('date')
+
+    def credential_tag(self,slot):
+        try:return hashlib.sha256(self.credential_path(slot).read_bytes()).hexdigest()
+        except OSError:return None
+
+    def skip_event(self,slot,message,reason):
+        self.event('skipped',message,profile_id=slot,credential_tag=self.credential_tag(slot),skip_reason=reason,mode='local')
+
+    def recover_record(self):
+        slot=self.store()['selected']
+        if not slot:raise UserError('请先选择已保存的账号。')
+        with external_lock(self.data/'locks'/slot),external_lock(self.data/'profiles-store'):
+            account=self.account(slot);current=now();task=self.schedulers[slot].info()
+            others=[]
+            for key in self.store()['profiles']:
+                try:others.append(self.account(key))
+                except UserError:continue
+            candidate=records.recovery_candidate(self.data,slot,account,self.history(2000),task,current,others)
+            if not candidate:raise UserError('没有找到可与当前账号和系统任务对应的成功日志，未更改记录，也未提交签到。')
+            if (self.success(slot,account) or '')>=candidate['instant'].date().isoformat():return self.status()
+            path=self.success_path(slot)
+            if path.exists():
+                backup=self.data/('last-success-'+slot+'.before-recovery.json')
+                if not backup.exists():legacy.atomic_write(backup,path.read_bytes())
+            records.commit_success(self.data,slot,account,candidate['instant'],source='log_recovery',evidence=candidate['evidence'])
+            self.account_event(slot,'record_recovered','已从 '+candidate['instant'].strftime('%Y-%m-%d %H:%M')+' 的成功执行日志恢复本地记录，未重新提交签到。')
+        return self.status()
 
     def account_event(self, slot, kind, message, **details):
         account=self.account(slot)
@@ -96,12 +123,15 @@ class StandardService(core.Service):
                              'last_success':self.success(key,account) if account else None,'managed':profile['managed'],'credential_ok':bool(account)})
         profile=store['profiles'].get(slot,{'time':'22:00','enabled':False,'managed':True,'auto_login':True,'identity':{}})
         account=credentials.get(slot)
+        selected_record=records.success_record(self.data,slot,account,current.date().isoformat()) if account else {}
         hour,minute=map(int,profile['time'].split(':'));following=current.replace(hour=hour,minute=minute,second=0,microsecond=0)
         if following<=current:following+=timedelta(days=1)
         result={**profile,'mode':'local','pending_sync':False,'edition':'standard','account_limit':LIMIT,'accounts':accounts,
                 'selected_profile':slot,'configured':bool(slot),'credential_ok':bool(account),'masked_id':'****'+account['student_id'][-4:] if account else '凭据待修复' if slot else '',
                 'account_tag':hashlib.sha256(account['student_id'].encode()).hexdigest()[:16] if account else None,
-                'last_success':self.success(slot,account) if account else None,'local_enabled':profile['enabled'],'time_valid':'21:30'<=profile['time']<='23:30',
+                'last_success':selected_record.get('date'),'local_enabled':profile['enabled'],'time_valid':'21:30'<=profile['time']<='23:30',
+                'success_source':selected_record.get('source','legacy') if account else None,'success_confirmed_at':selected_record.get('confirmed_at'),
+                'credential_tag':self.credential_tag(slot) if slot else None,
                 'next_run':following.isoformat(),'now':current.isoformat(),'identity':profile.get('identity',{}),'data_dir':str(self.data)}
         self.settings=result
         if task:result['task']=self.schedulers[slot].info() if slot else None
@@ -232,6 +262,7 @@ class StandardService(core.Service):
             # cannot run and is never re-imported from an existing profiles file.
             self.credential_path(slot).unlink(missing_ok=True)
             self.success_path(slot).unlink(missing_ok=True)
+            records.receipt_path(self.data,slot).unlink(missing_ok=True)
             self.event('account_removed','已移除账号及其本机计划。',profile_id=slot,account_label=label,mode='local')
         return self.status()
 
@@ -251,14 +282,20 @@ class StandardService(core.Service):
         if slot not in SLOTS:raise UserError('账号标识无效。')
         with external_lock(self.data/'locks'/slot):
             profile=self.store()['profiles'].get(slot)
-            if not profile or not profile['managed'] or not profile['enabled']:return 0
+            if not profile or not profile['managed'] or not profile['enabled']:
+                self.skip_event(slot,'本次未执行：账号计划未启用或尚未接管。','disabled');return 0
             current=now()
             if not '21:30'<=profile['time']<='23:30':
                 self.account_event(slot,'failed','计划时间不在新版允许的 21:30–23:30 范围，请重新设置。');return 1
-            if not within_window(current,profile['time']):return 0
+            if not within_window(current,profile['time']):
+                self.skip_event(slot,'本次未执行：触发时刻不在已保存时间 '+profile['time']+' 后的 15 分钟窗口内，请检查界面与系统计划时间。','outside_window');return 0
             account=self.account(slot)
             if self.success(slot,account)==current.date().isoformat():
                 self.account_event(slot,'skipped','今天已有成功记录，跳过重复执行。');return 0
+            tag=records.account_tag(account)[:16]
+            if any(e.get('kind')=='record_failed' and e.get('school_confirmed') is True and e.get('account_tag')==tag and
+                   e.get('at','')[:10]==current.date().isoformat() for e in self.history(2000)):
+                self.account_event(slot,'skipped','已有学校成功确认，但本地回执待修复；本次未重复提交签到。',skip_reason='record_pending');return 1
             module=legacy.load_upstream()
             class BeijingDateTime(datetime):
                 @classmethod
@@ -273,15 +310,33 @@ class StandardService(core.Service):
             handler=TimedRotatingFileHandler(self.data/f'signin-{slot}.log',when='midnight',backupCount=30,encoding='utf-8',utc=True)
             handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'));handler.addFilter(core.PrivateLogFilter(account));logger.addHandler(handler);logger.setLevel(logging.INFO)
             self.account_event(slot,'running','定时签到开始。')
+            confirmed=False;recorded=False
+            def save_confirmation():
+                nonlocal confirmed,recorded
+                confirmed=True
+                if recorded:return
+                compatible=records.commit_success(self.data,slot,account,now())
+                recorded=True
+                try:self.account_event(slot,'success','学校系统已确认今日签到成功，成功回执已保存。')
+                except OSError:logging.warning('成功回执已保存，但运行记录暂未同步。')
+                if not compatible:logging.warning('成功回执已保存，兼容成功文件写入失败；界面将读取回执。')
+            step_function=getattr(module,'sign_in_by_step',None)
+            if callable(step_function):
+                async def tracked_step(user,step,debug=False):
+                    value=await step_function(user,step,debug)
+                    if step==5 and isinstance(value,dict) and value.get('success') is True and value.get('step')==6:save_confirmation()
+                    return value
+                module.sign_in_by_step=tracked_step
             try:
                 result=asyncio.run(legacy.perform(module,account))
-                if result.get('success'):
-                    legacy.write_json(self.success_path(slot),{'student_id':account['student_id'],'date':current.date().isoformat()})
-                    if self.success(slot,account)!=current.date().isoformat():raise UserError('学校已返回成功，但本地成功记录未能保存，请在学校系统核实结果。')
-                    self.account_event(slot,'success','学校系统已确认今日签到成功。');return 0
+                if isinstance(result,dict) and result.get('success') is True:save_confirmation();return 0
+                if recorded:return 0
                 self.account_event(slot,'failed','学校系统未确认签到成功，请查看该账号的日志。');return 1
             except Exception as exc:
                 logging.error('签到异常类型：%s',type(exc).__name__)
-                self.account_event(slot,'failed','签到发生网络或系统异常，请查看该账号的日志。');return 1
+                if recorded:
+                    logging.warning('学校成功回执已保存，后续清理异常不改变签到结果。');return 0
+                self.account_event(slot,'record_failed' if confirmed else 'failed','学校已返回成功，但本地回执保存失败，请核实学校结果并检查数据目录权限。' if confirmed else '签到发生网络或系统异常，请查看该账号的日志。',school_confirmed=confirmed);return 1
             finally:
+                if callable(step_function):module.sign_in_by_step=step_function
                 logger.removeHandler(handler);handler.close()

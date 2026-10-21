@@ -18,8 +18,8 @@ Push-Location $PSScriptRoot
 try {
     & $compiler /V2 'installer.nsi'
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
-    $installer = Join-Path $root 'dist\AHUTSignIn-Setup-1.5.1-x64.exe'
+    $installer = Join-Path $root 'dist\AHUTSignIn-Setup-1.5.2-x64.exe'
     $digest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText((Join-Path $root 'dist\SHA256SUMS.txt'), "$digest  AHUTSignIn-Setup-1.5.1-x64.exe`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $root 'dist\SHA256SUMS.txt'), "$digest  AHUTSignIn-Setup-1.5.2-x64.exe`n", [Text.UTF8Encoding]::new($false))
     Write-Output "Installer built: $installer"
 } finally { Pop-Location }

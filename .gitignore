@@ -19,6 +19,7 @@
 !/docs/发布说明-1.4.0.md
 !/docs/发布说明-1.5.0.md
 !/docs/发布说明-1.5.1.md
+!/docs/发布说明-1.5.2.md
 /upstream/*
 !/upstream/main.py
 !/upstream/main_sync.py
