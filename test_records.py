@@ -29,7 +29,7 @@ class RecordTests(TestCase):
             self.assertEqual(self.service.success('primary',account),'2026-10-21')
             if cleanup_error:raise RuntimeError('simulated tail/session cleanup error')
             return dict(success=True)
-        with patch.object(accounts,'now',return_value=self.instant),patch.object(legacy,'load_upstream',return_value=module),patch.object(legacy,'perform',new=AsyncMock(side_effect=perform)) as call:
+        with patch.object(accounts,'now',return_value=self.instant),patch.object(core,'now',return_value=self.instant),patch.object(legacy,'load_upstream',return_value=module),patch.object(legacy,'perform',new=AsyncMock(side_effect=perform)) as call:
             result=self.service.scheduled_run('primary')
         return result,call
 

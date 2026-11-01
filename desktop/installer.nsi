@@ -4,16 +4,22 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !ifndef VERSION
-!define VERSION "1.5.2"
+!define VERSION "1.5.3"
+!endif
+!ifndef PAYLOAD_DIR
+!define PAYLOAD_DIR "..\dist\晚安助手"
+!endif
+!ifndef OUTPUT_DIR
+!define OUTPUT_DIR "..\dist"
 !endif
 Name "晚安助手"
-OutFile "..\dist\AHUTSignIn-Setup-${VERSION}-x64.exe"
+OutFile "${OUTPUT_DIR}\AHUTSignIn-Setup-${VERSION}-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\AHUTSignIn"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AHUTSignIn" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 BrandingText "晚安助手 · AHUT"
-VIProductVersion "1.5.2.0"
+VIProductVersion "1.5.3.0"
 VIAddVersionKey /LANG=2052 "ProductName" "晚安助手安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "FileDescription" "晚安助手 Windows x64 安装程序"
@@ -60,7 +66,7 @@ Section "安装"
  ${EndIf}
 copy_files:
  SetOutPath "$INSTDIR"
- File /r "..\dist\晚安助手\*"
+ File /r "${PAYLOAD_DIR}\*"
  WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoRegister" $NoRegister
  WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoShortcuts" $NoShortcuts
  WriteUninstaller "$INSTDIR\Uninstall.exe"

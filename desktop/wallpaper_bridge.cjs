@@ -36,12 +36,14 @@ async function run() {
   profiles.sort((a,b)=>Number(b[0].toLowerCase()===os.userInfo().username.toLowerCase())-Number(a[0].toLowerCase()===os.userInfo().username.toLowerCase()));
   for(const [,profile] of profiles) {
    const selected=profile.general.wallpaperconfig.selectedwallpapers||{};
-   const current=selected.Monitor0;
+   const monitor=job.monitor || 'Monitor0';
+   if(!/^Monitor[0-9]+$/.test(monitor))throw Error('monitor');
+   const current=selected[monitor];
    if(!current || !local(current.file))continue;
    const project=path.join(path.dirname(current.file),'project.json');
    const data=JSON.parse(fs.readFileSync(project,'utf8'));
    if(!['scene','video','web'].includes(data.type))throw Error('unsupported-wallpaper-type');
-   const properties=((profile.wproperties||{})[current.file]||{}).Monitor0||{};
+   const properties=((profile.wproperties||{})[current.file]||{})[monitor]||{};
    const props=silentProperties(data,properties);
    return {engine:job.engine,project,file:current.file,type:data.type,properties:props};
   }

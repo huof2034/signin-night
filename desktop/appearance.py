@@ -283,12 +283,35 @@ def sample_image(path):
     return {'accent':color.name(),'dark':luminance(average.name())<.48}
 
 
+def monitor_key(config, screen_model):
+    """Match a Qt screen's EDID name to Wallpaper Engine's persisted location."""
+    if not screen_model or os.name != 'nt': return None
+    import winreg
+    locations=set()
+    for profile in config.values():
+        if not isinstance(profile,dict): continue
+        general=mapping(profile.get('general'))
+        monitors=mapping(mapping(general.get('user')).get('monitormap'))
+        for device, info in monitors.items():
+            parts=device.replace('\\','/').split('#')
+            if len(parts)<3 or not isinstance(info,dict): continue
+            try:
+                key='SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\'+parts[1]+'\\'+parts[2]+'\\Device Parameters'
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,key) as reg:
+                    edid=winreg.QueryValueEx(reg,'EDID')[0]
+                names=[edid[i+5:i+18].split(b'\n')[0].decode('ascii','ignore').strip() for i in range(54,min(len(edid)-17,126),18) if edid[i:i+4]==b'\x00\x00\x00\xfc']
+                location=info.get('location')
+                if screen_model in names and type(location) is int and location>=0: locations.add(location)
+            except (OSError,ValueError,TypeError): continue
+    return 'Monitor'+str(next(iter(locations))) if len(locations)==1 else None
+
+
 class WallpaperReader:
     def __init__(self):
         self.cached_signature = None
         self.cached_result = None
 
-    def resolve(self, custom=''):
+    def resolve(self, custom='', screen_model=''):
         for root in (engine_roots(custom) if engine_running() else []):
             config=read_json(root/'config.json')
             profiles=[(key,value) for key,value in config.items() if isinstance(value,dict) and isinstance(value.get('general'),dict)]
@@ -297,7 +320,8 @@ class WallpaperReader:
             for _,profile in profiles:
                 selected=mapping(profile['general'].get('wallpaperconfig')).get('selectedwallpapers',{})
                 if not isinstance(selected,dict): continue
-                chosen=selected.get('Monitor0') or next(iter(selected.values()),{})
+                monitor=monitor_key(config,screen_model) if screen_model else 'Monitor0'
+                chosen=selected.get(monitor,{})
                 if not isinstance(chosen,dict): continue
                 wallpaper=local_path(chosen.get('file'))
                 if not wallpaper: continue
@@ -309,7 +333,7 @@ class WallpaperReader:
                     candidate=(folder/name).resolve()
                     if candidate.is_relative_to(folder.resolve()): preview=candidate
                 properties=mapping(profile.get('wproperties')).get(chosen['file'],{})
-                override=(properties.get('Monitor0') or next(iter(properties.values()),{})) if isinstance(properties,dict) else {}
+                override=(properties.get(monitor,{})) if isinstance(properties,dict) else {}
                 color=scheme_color(override.get('schemecolor')) if isinstance(override,dict) else None
                 default=mapping(mapping(project.get('general')).get('properties')).get('schemecolor',{})
                 color=color or scheme_color(default.get('value') if isinstance(default,dict) else default)
@@ -319,7 +343,7 @@ class WallpaperReader:
                 if not color and not sampled: continue
                 return self.cache(signature,{'accent':color or sampled['accent'],
                     'dark':sampled['dark'] if sampled else luminance(color)<.48,
-                    'source':'Wallpaper Engine · 主显示器 · '+('壁纸配色' if color else '预览图取色'),
+                    'source':'Wallpaper Engine · 当前显示器 · '+('壁纸配色' if color else '预览图取色'),
                     'detail':'配色由本地壁纸预览与配置生成；不读取动态画面。'})
         wallpaper=windows_wallpaper()
         signature=('windows',self.stamp(wallpaper))

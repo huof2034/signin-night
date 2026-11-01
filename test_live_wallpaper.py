@@ -24,6 +24,21 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(Path(value['project']),project/'project.json');self.assertEqual(value['type'],'scene');self.assertIs(value['properties']['music'],False)
             self.assertEqual(config,json.loads((engine/'config.json').read_text(encoding='utf-8')))
 
+    def test_current_monitor_selects_its_own_project_and_properties(self):
+        with tempfile.TemporaryDirectory(prefix='ahut-live-monitors-') as folder:
+            root=Path(folder); (root/'wallpaper64.exe').write_bytes(b'not executable')
+            selected={}; props={}
+            for i in range(2):
+                project=root/str(i); project.mkdir()
+                (project/'project.json').write_text(json.dumps({'type':'scene'}),encoding='utf-8')
+                file=str(project/'scene.pkg'); selected['Monitor'+str(i)]={'file':file}
+                props[file]={'Monitor'+str(i):{'brightness':i+1}}
+            (root/'config.json').write_text(json.dumps({'user':{'general':{'wallpaperconfig':{'selectedwallpapers':selected}},'wproperties':props}}),encoding='utf-8')
+            result=live.bridge({'action':'current','engine':str(root),'monitor':'Monitor1'})
+            self.assertEqual(Path(result['project']),root/'1'/'project.json')
+            self.assertEqual(result['properties']['brightness'],2)
+            with self.assertRaises(RuntimeError): live.bridge({'action':'current','engine':str(root),'monitor':'Monitor2'})
+
     def test_music_sliders_and_ambient_sounds_are_silent_without_disabling_visuals(self):
         with tempfile.TemporaryDirectory(prefix='ahut-live-silent-') as folder:
             root=Path(folder);(root/'wallpaper64.exe').write_bytes(b'not executable')

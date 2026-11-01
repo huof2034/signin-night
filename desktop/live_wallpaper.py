@@ -22,7 +22,7 @@ import uuid
 from PySide6.QtCore import QObject,QProcess,QTimer,Signal,Slot,Qt,QSize
 from PySide6.QtGui import QImage,QPainter,QColor
 from PySide6.QtWidgets import QWidget,QApplication
-from .appearance import engine_roots,engine_running,palette
+from .appearance import engine_roots,engine_running,palette,read_json,monitor_key
 
 HERE=Path(__file__).resolve().parent
 VENDOR=HERE/'vendor'
@@ -261,8 +261,13 @@ class LiveWallpaper(QObject):
         roots=[p for p in engine_roots(self.custom_path()) if (p/'config.json').is_file()]
         node=VENDOR/'wallpaper-api/node.exe'
         if not roots or not node.is_file():self.say('动态组件不可用，请检查 Wallpaper Engine 目录');return
+        screen=self.owner.screen() if hasattr(self.owner,'screen') else None
+        model=screen.model() if screen else ''
+        monitor=monitor_key(read_json(roots[0]/'config.json'),model) if model else None
+        if not monitor:
+            self.stop_player();self.say('无法识别当前显示器的壁纸，请检查显示器配置');return
         query=QProcess(self);self.query=query
-        query.setProgram(str(node));query.setArguments([str(HERE/'wallpaper_bridge.cjs'),json.dumps({'action':'current','engine':str(roots[0])})])
+        query.setProgram(str(node));query.setArguments([str(HERE/'wallpaper_bridge.cjs'),json.dumps({'action':'current','engine':str(roots[0]),'monitor':monitor})])
         query.finished.connect(self.discovered);query.errorOccurred.connect(self.query_error)
         if not self.process:self.say('正在读取当前壁纸项目…')
         self.query_timeout.start(30_000);query.start()

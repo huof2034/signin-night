@@ -497,7 +497,7 @@ class Window(QMainWindow):
         self.transparency_hint=text('','Small',True); box.addWidget(self.transparency_hint)
         self.transparency_reset=button('恢复默认 · 14%'); self.transparency_reset.clicked.connect(self.reset_transparency); box.addWidget(self.transparency_reset,alignment=Qt.AlignmentFlag.AlignLeft)
         self.wallpaper_info=text(self.wallpaper_source,'Notice',True); box.addWidget(self.wallpaper_info)
-        box.addWidget(text('跟随 Wallpaper Engine 主显示器选择同一项目，在程序背景独立动态播放，动画进度可能不同。关闭、最小化或切到其他主题时释放播放器；不截取其他应用，不上传画面。','Small',True))
+        box.addWidget(text('跟随窗口所在显示器选择同一项目，在程序背景独立动态播放，动画进度可能不同。关闭、最小化或切到其他主题时释放播放器；不截取其他应用，不上传画面。','Small',True))
         engine_row=QHBoxLayout(); self.engine_edit=QLineEdit(self.preferences.value['engine_path']); self.engine_edit.setPlaceholderText('Wallpaper Engine 安装目录（留空自动查找）'); self.engine_edit.setReadOnly(True); engine_row.addWidget(self.engine_edit,1)
         choose=button('选择目录'); choose.clicked.connect(self.choose_engine); engine_row.addWidget(choose)
         reset=button('自动查找'); reset.clicked.connect(lambda:self.save_engine('')); engine_row.addWidget(reset); box.addLayout(engine_row)
@@ -684,7 +684,7 @@ class Window(QMainWindow):
         if self.preferences.value['theme']!='wallpaper' and not force: return
         self.wallpaper_reading=True
         if force: self.wallpaper_reader.cached_signature=None
-        path=self.preferences.value['engine_path']; task=Job(lambda:self.wallpaper_reader.resolve(path)); key=id(task)
+        path=self.preferences.value['engine_path']; screen=self.screen(); model=screen.model() if screen else ''; task=Job(lambda:self.wallpaper_reader.resolve(path,model)); key=id(task)
         def finish(value):
             self.wallpaper_reading=False; release_job(self,key)
             if 'accent' in value:
