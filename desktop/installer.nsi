@@ -4,7 +4,7 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !ifndef VERSION
-!define VERSION "1.5.3"
+!define VERSION "1.5.4"
 !endif
 !ifndef PAYLOAD_DIR
 !define PAYLOAD_DIR "..\dist\晚安助手"
@@ -19,7 +19,7 @@ InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AHUTS
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 BrandingText "晚安助手 · AHUT"
-VIProductVersion "1.5.3.0"
+VIProductVersion "1.5.4.0"
 VIAddVersionKey /LANG=2052 "ProductName" "晚安助手安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "FileDescription" "晚安助手 Windows x64 安装程序"
@@ -35,6 +35,7 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "AHUT SignIn Desktop contributors"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 Var NoRegister
 Var NoShortcuts
+Var UpdateOnly
 
 Function .onInit
  ${IfNot} ${RunningX64}
@@ -43,6 +44,14 @@ Function .onInit
  ${EndIf}
  StrCpy $NoRegister 0
  StrCpy $NoShortcuts 0
+ StrCpy $UpdateOnly 0
+ ClearErrors
+ ${GetOptions} $CMDLINE "/UPDATE" $0
+ ${IfNot} ${Errors}
+  StrCpy $UpdateOnly 1
+  StrCpy $NoRegister 1
+  StrCpy $NoShortcuts 1
+ ${EndIf}
  ClearErrors
  ${GetOptions} $CMDLINE "/NOREGISTER" $0
  ${IfNot} ${Errors}
@@ -66,10 +75,18 @@ Section "安装"
  ${EndIf}
 copy_files:
  SetOutPath "$INSTDIR"
+ ClearErrors
  File /r "${PAYLOAD_DIR}\*"
- WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoRegister" $NoRegister
- WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoShortcuts" $NoShortcuts
- WriteUninstaller "$INSTDIR\Uninstall.exe"
+ IfErrors copy_failed copy_ok
+copy_failed:
+ SetErrorLevel 4
+ Quit
+copy_ok:
+ ${If} $UpdateOnly == 0
+  WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoRegister" $NoRegister
+  WriteINIStr "$INSTDIR\install-options.ini" "Install" "NoShortcuts" $NoShortcuts
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+ ${EndIf}
  ${If} $NoShortcuts == 0
   CreateDirectory "$SMPROGRAMS\晚安助手"
   CreateShortcut "$SMPROGRAMS\晚安助手\晚安助手.lnk" "$INSTDIR\晚安助手.exe"

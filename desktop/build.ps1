@@ -9,6 +9,8 @@ foreach ($wallpaperDependency in @('wallpaper-api\node.exe','repkg\RePKG.exe','c
 }
 Push-Location $root
 try {
+    & $python -B -m PyInstaller --noconfirm --onefile --windowed --name AHUTUpdater --paths $root --workpath (Join-Path $root '.desktop-build\updater') --distpath $PSScriptRoot --specpath (Join-Path $root '.desktop-build') (Join-Path $PSScriptRoot 'update_runner.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Updater build failed.' }
     & $python -B -m PyInstaller --noconfirm --workpath (Join-Path $root '.desktop-build') --distpath (Join-Path $root 'dist') (Join-Path $PSScriptRoot 'app.spec')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
     & $python -B (Join-Path $PSScriptRoot 'package.py')

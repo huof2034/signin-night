@@ -1,6 +1,10 @@
 """Release checks and asynchronous UI, without network or attendance calls."""
 import io
 import json
+import hashlib
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase, main
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -69,8 +73,25 @@ class UpdateUiTests(TestCase):
             w.check_update(manual=True);self.wait_update();check.assert_called_once()
         self.assertFalse(w.busy);self.assertTrue(w.tray_download.isVisible())
         self.assertIn('1.6.0',w.update_status.text());self.assertTrue(w.update_button.isEnabled())
-        with patch('PySide6.QtGui.QDesktopServices.openUrl') as open_url:w.open_update()
-        self.assertEqual(open_url.call_args.args[0].toString(),release()['html_url'])
+        with patch.object(updates,'download_installer',return_value=Path('fake-update.exe')) as download, patch.object(updates,'start_installer') as install, patch.object(w,'quit_ui') as quit_ui:
+            w.open_update();w.open_update()
+            for _ in range(200):
+                self.app.processEvents()
+                if not w.updating:break
+                QTest.qWait(10)
+            download.assert_called_once();install.assert_called_once();quit_ui.assert_called_once()
+
+    def test_failed_download_keeps_application_and_allows_retry(self):
+        w=self.window;before=self.service.store();w.update_release=updates.parse_release(release())
+        with patch.object(updates,'download_installer',side_effect=updates.UpdateError('校验失败')),patch.object(w,'quit_ui') as quit_ui:
+            w.open_update()
+            for _ in range(200):
+                self.app.processEvents()
+                if not w.updating:break
+                QTest.qWait(10)
+            quit_ui.assert_not_called()
+        self.assertFalse(w.updating);self.assertFalse(w.busy)
+        self.assertTrue(w.update_download.isEnabled());self.assertEqual(self.service.store(),before)
 
     def test_auto_check_error_is_quiet_and_does_not_change_plan(self):
         w=self.window;before=self.service.store();notice=w.notice.text()
@@ -86,6 +107,41 @@ class UpdateUiTests(TestCase):
         self.assertEqual(w.update_start_timer.interval(),8000)
         w.save_preference('auto_check_updates',False)
         self.assertFalse(Preferences(self.service.data).value['auto_check_updates'])
+
+
+class DownloadTests(TestCase):
+    def item(self,data=b'installer'):
+        item=release();asset=item['assets'][0]
+        asset['size']=len(data);asset['digest']='sha256:'+hashlib.sha256(data).hexdigest()
+        return updates.parse_release(item)
+
+    def test_verified_download_and_progress(self):
+        data=b'installer';progress=[]
+        with patch.object(updates,'build_opener') as opener:
+            opener.return_value.open.return_value=io.BytesIO(data)
+            path=updates.download_installer(self.item(data),progress.append)
+        try:
+            self.assertEqual(path.read_bytes(),data);self.assertEqual(progress[-1],100)
+        finally:updates.clean_download(path.parent)
+
+    def test_missing_digest_rejected_before_download(self):
+        with patch.object(updates,'build_opener') as opener,self.assertRaises(updates.UpdateError):
+            updates.download_installer(updates.parse_release(release()))
+        opener.assert_not_called()
+
+    def test_corruption_truncation_and_oversize_never_leave_installer(self):
+        for data in (b'corrupted',b'bad',b'too much data to be correct'):
+            with tempfile.TemporaryDirectory() as folder:
+                work=Path(folder)/'ahut-update-test';work.mkdir()
+                with patch.object(updates.tempfile,'mkdtemp',return_value=str(work)),patch.object(updates,'build_opener') as opener:
+                    opener.return_value.open.return_value=io.BytesIO(data)
+                    with self.assertRaises(updates.UpdateError):updates.download_installer(self.item())
+                self.assertFalse(work.exists())
+
+    def test_untrusted_redirect_rejected(self):
+        for url in ('http://github.com/file','https://example.com/file','https://github.com.evil.test/file'):
+            with self.assertRaises(updates.UpdateError):
+                updates.SafeRedirect().redirect_request(None,None,302,'',{},url)
 
 
 if __name__=='__main__':main()

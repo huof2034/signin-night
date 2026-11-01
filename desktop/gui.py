@@ -289,6 +289,7 @@ class TimeEdit(QTimeEdit):
 
 class Window(QMainWindow):
     runtime_error = Signal(str)
+    update_progress = Signal(int)
 
     def __init__(self, service):
         super().__init__()
@@ -309,6 +310,8 @@ class Window(QMainWindow):
         self.appearance_pool = QThreadPool(self); self.appearance_pool.setMaxThreadCount(1); self.wallpaper_reading=False
         self.update_pool = QThreadPool(self); self.update_pool.setMaxThreadCount(1)
         self.update_checking=False; self.update_release=None; self.update_notified_version=''
+        self.updating=False
+        self.update_progress.connect(self.show_update_progress)
         self.event_notifications = EventNotifications(now()); self.wallpaper_source = '正在读取本机壁纸…'
         self.theme_combos = []; self.theme_colors = palette(self.preferences.value['theme'],self.preferences.value['accent'],self.preferences.value['wallpaper_dark'])
         self.jobs = {}; self.busy = False; self.rendering = False; self.authenticated = False; self.task_state = None; self.configuration_error=''; self.task_probe_error=''; self.remote_state = None; self.probing = False
@@ -338,6 +341,7 @@ class Window(QMainWindow):
         self.update_timer.timeout.connect(self.auto_check_update); self.update_timer.start()
         self.update_start_timer=QTimer(self); self.update_start_timer.setSingleShot(True)
         self.update_start_timer.timeout.connect(self.auto_check_update); self.update_start_timer.start(8000)
+        QTimer.singleShot(1500, self.show_update_result)
         if self.state['configured'] and self.state['auto_login']:
             QTimer.singleShot(350, self.login_saved)
 
@@ -516,17 +520,17 @@ class Window(QMainWindow):
         check=QCheckBox('自动检查新版本'); check.setChecked(self.preferences.value['auto_check_updates'])
         check.toggled.connect(lambda checked:self.save_preference('auto_check_updates',checked))
         self.preference_checks['auto_check_updates']=check; box.addWidget(check)
-        box.addWidget(text('启动 8 秒后及运行期间每 4 小时检查 GitHub 正式版。退出程序后停止检查；不会自动下载或安装，不影响定时签到。','Small',True))
+        box.addWidget(text('启动 8 秒后及运行期间每 4 小时检查正式版。点击“现在更新”后下载、校验、安装并重启，保留账号及系统签到计划。','Small',True))
         self.update_status=text('尚未检查更新。','Muted',True); box.addWidget(self.update_status)
         row=QHBoxLayout(); self.update_button=button('检查更新'); self.update_button.clicked.connect(lambda:self.check_update(manual=True)); row.addWidget(self.update_button)
-        self.update_download=button('打开新版下载页',primary=True); self.update_download.clicked.connect(self.open_update); self.update_download.hide(); row.addWidget(self.update_download); row.addStretch(); box.addLayout(row)
+        self.update_download=button('现在更新',primary=True); self.update_download.clicked.connect(self.open_update); self.update_download.hide(); row.addWidget(self.update_download); row.addStretch(); box.addLayout(row)
         outer.addWidget(frame); outer.addStretch(); return page
 
     def auto_check_update(self):
         if self.preferences.value['auto_check_updates']: self.check_update()
 
     def check_update(self,manual=False):
-        if self._quitting or self.update_checking: return
+        if self._quitting or self.update_checking or self.updating: return
         self.update_checking=True; self.update_button.setEnabled(False)
         self.update_status.setText('正在连接 GitHub 检查正式发布版…')
         self.title_bar.sync()
@@ -548,16 +552,16 @@ class Window(QMainWindow):
             self.update_release=value
             self.title_bar.sync()
             self.update_download.setVisible(value.available)
-            message=('发现新版本 '+value.version+'，可打开下载页下载安装包。' if value.available else '当前版本 '+updates.VERSION+' 已是最新可用版本。')
+            message=('发现新版本 '+value.version+'，点击“现在更新”即可下载安装并重启。' if value.available else '当前版本 '+updates.VERSION+' 已是最新可用版本。')
             self.update_status.setText(message+'（检查于 '+checked+'）')
             self.login_update_status.setText(message)
             if value.available:self.login_update_status.show()
             self.tray_download.setVisible(value.available)
             if value.available:
-                self.tray_download.setText('下载新版本 '+value.version)
+                self.tray_download.setText('现在更新至 '+value.version)
                 if value.version!=self.update_notified_version:
                     self.update_notified_version=value.version
-                    self.desktop_notification('发现新版本 '+value.version,'请从托盘“下载新版本”或“外观与通知”打开下载页。')
+                    self.desktop_notification('发现新版本 '+value.version,'点击“现在更新”即可下载安装并重启。')
             if manual: self.notify(message)
         connect_job(self,task,lambda value:finish(value),lambda error:finish(error=error)); self.update_pool.start(task)
         if manual:
@@ -565,10 +569,48 @@ class Window(QMainWindow):
             if self.root_stack.currentIndex()==1: self.go(5)
 
     def open_update(self):
-        if not self.update_release or not self.update_release.available: return
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-        QDesktopServices.openUrl(QUrl(self.update_release.page))
+        if not self.update_release or not self.update_release.available or self.updating: return
+        if self.busy:
+            self.notify('当前操作尚未完成，请完成后点击更新。', True); return
+        release=self.update_release
+        self.updating=True; self.busy=True
+        self.update_button.setEnabled(False); self.update_download.setEnabled(False)
+        self.tray_update.setEnabled(False); self.tray_download.setEnabled(False)
+        for control in self.controls: control.setEnabled(False)
+        self.title_bar.sync(); self.show_update_progress(0)
+        task=Job(lambda:updates.download_installer(release,self.update_progress.emit)); key=id(task)
+        def failed(message):
+            release_job(self,key); self.updating=False; self.busy=False
+            self.update_status.setText('更新未完成：'+message)
+            self.update_button.setEnabled(True); self.update_download.setEnabled(True)
+            self.tray_update.setEnabled(True); self.tray_download.setEnabled(True)
+            self.title_bar.sync(); self.refresh(); self.notify(message,True)
+        def downloaded(path):
+            try:
+                wallpaper_pid=self.live_wallpaper.process.pid if self.live_wallpaper.process else None
+                updates.start_installer(path,release,self.service.data,wallpaper_pid)
+            except (updates.UpdateError,OSError) as exc:
+                updates.clean_download(Path(path).parent)
+                failed(str(exc)); return
+            release_job(self,key)
+            self.update_status.setText('校验通过，正在安装并重启…')
+            self.updating=False; self.busy=False; self.quit_ui()
+        connect_job(self,task,downloaded,failed); self.update_pool.start(task)
+
+    @Slot(int)
+    def show_update_progress(self,value):
+        if self.updating:
+            self.update_status.setText('正在下载更新：'+str(value)+'% · 下载后自动校验、安装并重启')
+
+    def show_update_result(self):
+        result=updates.consume_result(self.service.data)
+        if not result:return
+        if result.get('ok'):
+            self.notify('已更新至 '+str(result.get('version',''))+'，原有签到计划已保留。')
+            work=result.get('work')
+            if work:QTimer.singleShot(8000,lambda:updates.clean_download(work))
+        else:
+            self.notify('更新未完成：'+str(result.get('message','请重试。'))+' 备份位置：'+str(result.get('backup','')),True)
 
     def save_preference(self,key,value):
         try: self.preferences.set(**{key:value})

@@ -8,6 +8,7 @@ datas = [(str(root / 'upstream' / name), 'upstream') for name in ['main.py','REA
 datas.append((str(root / 'THIRD_PARTY_NOTICES.md'), '.'))
 
 datas.append((str(root / 'desktop' / 'wallpaper_bridge.cjs'), 'desktop'))
+datas.append((str(root / 'desktop' / 'AHUTUpdater.exe'), 'desktop'))
 datas.append((str(root / 'desktop' / 'vendor'), 'desktop/vendor'))
 for package in ['PySide6-Essentials','shiboken6','aiohttp','aiohappyeyeballs','aiosignal','attrs','frozenlist','idna','multidict','propcache','yarl','pyinstaller']:
     metadata = distribution(package)

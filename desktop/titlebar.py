@@ -46,7 +46,7 @@ class TitleBar(QFrame):
         current=self.menu.addAction('当前版本 v'+VERSION);current.setEnabled(False)
         self.menu.addSeparator();self.check_action=self.menu.addAction('检查更新')
         self.check_action.triggered.connect(lambda:owner.check_update(manual=True))
-        self.download_action=self.menu.addAction('打开新版下载页');self.download_action.setVisible(False)
+        self.download_action=self.menu.addAction('现在更新');self.download_action.setVisible(False)
         self.download_action.triggered.connect(owner.open_update)
         self.version.clicked.connect(self.show_version_menu);row.addWidget(self.version);row.addStretch()
         self.minimize=CaptionButton(owner,'minimize','最小化');self.minimize.clicked.connect(owner.showMinimized)
@@ -55,12 +55,13 @@ class TitleBar(QFrame):
         for item in (self.minimize,self.maximize,self.close_button):row.addWidget(item)
 
     def sync(self):
-        checking=self.owner.update_checking
+        checking=self.owner.update_checking or self.owner.updating
         self.check_action.setEnabled(not checking)
         self.check_action.setText('正在检查更新…' if checking else '检查更新')
         release=self.owner.update_release;available=bool(release and release.available)
         self.download_action.setVisible(available)
-        if available:self.download_action.setText('下载新版本 '+release.version)
+        self.download_action.setEnabled(not self.owner.updating)
+        if available:self.download_action.setText('现在更新至 '+release.version)
         self.version.setToolTip('发现新版本 '+release.version+'，点击打开更新菜单' if available else '点击查看版本和检查更新')
         self.maximize.setToolTip('还原' if self.owner.isMaximized() else '最大化')
         self.maximize.setAccessibleName(self.maximize.toolTip());self.maximize.update()

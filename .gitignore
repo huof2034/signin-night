@@ -13,6 +13,7 @@
 !/docs/
 !/upstream/
 /desktop/vendor/
+/desktop/AHUTUpdater.exe
 /desktop/__pycache__/
 /docs/*
 !/docs/使用说明.md
@@ -21,6 +22,7 @@
 !/docs/发布说明-1.5.1.md
 !/docs/发布说明-1.5.2.md
 !/docs/发布说明-1.5.3.md
+!/docs/发布说明-1.5.4.md
 /upstream/*
 !/upstream/main.py
 !/upstream/main_sync.py

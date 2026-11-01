@@ -10,6 +10,10 @@ if __name__ == '__main__':
         raise SystemExit(worker_main(sys.argv[sys.argv.index('--wallpaper-worker')+1:]))
     if '--scheduled' in sys.argv or '--rpc' in sys.argv or '--verify-login' in sys.argv:
         from desktop.core import command_main
+        if '--scheduled' in sys.argv:
+            from desktop.update_lock import installation_lock
+            with installation_lock(sys.executable, timeout=120):
+                raise SystemExit(command_main())
         raise SystemExit(command_main())
     try:
         from desktop.gui import run

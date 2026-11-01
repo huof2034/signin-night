@@ -43,7 +43,8 @@ def main(argv=None):
             from PySide6.QtCore import qVersion
             from PySide6.QtGui import QImage
             from .live_wallpaper import HERE,VENDOR
-            report={'python':platform.python_version(),'qt':qVersion(),'architecture':platform.machine(),
+            from .updates import VERSION
+            report={'version':VERSION,'python':platform.python_version(),'qt':qVersion(),'architecture':platform.machine(),
                 'image':not QImage(2,2,QImage.Format.Format_RGB32).isNull(),
                 'wallpaper_components':all(p.is_file() for p in [VENDOR/'wallpaper-api/node.exe',VENDOR/'capture/windows_capture.pyd',VENDOR/'repkg/RePKG.exe',HERE/'wallpaper_bridge.cjs'])}
             import importlib.util
@@ -51,8 +52,9 @@ def main(argv=None):
             module=importlib.util.module_from_spec(capture);capture.loader.exec_module(module)
             report['capture_import']=True
             report['node']=core.execute([str(VENDOR/'wallpaper-api/node.exe'),'--version'],timeout=10).stdout.strip()
+            report['updater']=core.execute([str(HERE/'AHUTUpdater.exe'),'--self-check'],timeout=15,check=False).returncode==0
             report['school_module']=callable(core.legacy.load_upstream().sign_in)
-            report['ok']=all(report[k] for k in ('image','wallpaper_components','school_module','capture_import','node'))
+            report['ok']=all(report[k] for k in ('image','wallpaper_components','school_module','capture_import','node','updater'))
             Path(args.self_check).write_text(json.dumps(report),encoding='utf-8')
             return 0 if report['ok'] else 1
         if args.prepare_update:
